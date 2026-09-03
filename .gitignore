@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.yarn/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+build/
+.next/
+out/
+coverage/
+
+# Logs
+*.log
+logs/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Test/cache
+.nyc_output/
+.cache/
+
+# Backend generated files
+backend/uploads/
+backend/tmp/
+
+# Frontend generated files
+frontend/.next/
+frontend/out/
+
+# Local databases / dumps
+*.sqlite
+*.sqlite3
+*.db
+*.sql.gz
+
+# Secrets / certificates
+*.pem
+*.key
+*.crt
