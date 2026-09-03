@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   Module,
   UnauthorizedException,
   Controller,
@@ -46,6 +47,8 @@ export interface AccessTokenPayload {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly db: DatabaseService,
     private readonly jwt: JwtService,
@@ -54,7 +57,27 @@ export class AuthService {
   ) {}
 
   async hashPassword(plain: string): Promise<string> {
-    return argon2.hash(plain);
+    return argon2.hash(plain, { type: argon2.argon2id });
+  }
+
+  /**
+   * Safely verifies password against hash. Malformed hashes or unexpected argon2
+   * parsing failures return false and log a warning, rather than throwing an
+   * unhandled TypeError (e.g. "pchstr must contain a $ as first char") to the client.
+   */
+  async verifyPassword(hash: string, plain: string): Promise<boolean> {
+    try {
+      if (!hash || typeof hash !== 'string' || !hash.startsWith('$')) {
+        this.logger.warn('Password verification failed: stored hash is malformed or invalid format.');
+        return false;
+      }
+      return await argon2.verify(hash, plain);
+    } catch (err) {
+      this.logger.warn(
+        `Password verification failed safely: ${(err as Error)?.message || 'unknown verification error'}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -85,7 +108,7 @@ export class AuthService {
     if (!user || user.status !== 'active') {
       throw new UnauthorizedException('Invalid credentials');
     }
-    const valid = await argon2.verify(user.password_hash, dto.password);
+    const valid = await this.verifyPassword(user.password_hash, dto.password);
     if (!valid) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -127,7 +150,7 @@ export class AuthService {
     if (!user || user.status !== 'active') {
       throw new UnauthorizedException('Invalid credentials');
     }
-    const valid = await argon2.verify(user.password_hash, dto.password);
+    const valid = await this.verifyPassword(user.password_hash, dto.password);
     if (!valid) {
       throw new UnauthorizedException('Invalid credentials');
     }

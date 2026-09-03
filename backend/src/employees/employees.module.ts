@@ -53,7 +53,7 @@ export class EmployeesService {
   }
 
   async createEmployee(tenantId: string, actorUserId: string, dto: CreateEmployeeDto) {
-    const passwordHash = await argon2.hash(dto.password);
+    const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
     const user = await this.db.withTenant(tenantId, async (client) => {
       const res = await client.query(
         `INSERT INTO users (tenant_id, username, password_hash, display_name, status)

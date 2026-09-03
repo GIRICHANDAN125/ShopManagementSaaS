@@ -160,11 +160,24 @@ export const api = {
   reportsMonthly: () => request('/reports/monthly'),
 
   listTenants: () => request('/super-admin/tenants'),
-  createTenant: (displayName: string, businessType?: string) =>
-    request('/super-admin/tenants', {
+  createTenant: (
+    input:
+      | string
+      | {
+          displayName: string;
+          businessType?: string;
+          adminUsername?: string;
+          adminDisplayName?: string;
+          adminPassword?: string;
+        },
+    businessType?: string,
+  ) => {
+    const payload = typeof input === 'string' ? { displayName: input, businessType } : input;
+    return request('/super-admin/tenants', {
       method: 'POST',
-      body: JSON.stringify({ displayName, businessType }),
-    }),
+      body: JSON.stringify(payload),
+    });
+  },
   setTenantStatus: (tenantId: string, status: 'active' | 'inactive') =>
     request('/super-admin/tenants/status', {
       method: 'POST',

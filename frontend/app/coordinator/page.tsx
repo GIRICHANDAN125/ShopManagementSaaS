@@ -2,7 +2,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import io, { Socket } from 'socket.io-client';
-import { api, ApiError, getToken, clearToken } from '@/lib/api';
+import { api, ApiError, getToken, decodeTokenPayload } from '@/lib/api';
+import { PageShell, ErrorText } from '@/lib/ui';
 
 const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? 'http://localhost:3001';
 
@@ -43,14 +44,18 @@ export default function CoordinatorPage() {
       router.push('/login');
       return;
     }
+    const payload = decodeTokenPayload(token);
+    const perms = payload?.permissions || [];
+    if (!payload?.isSuperAdmin && !perms.includes('order.view') && !perms.includes('*')) {
+      router.push('/login');
+      return;
+    }
+
     refresh();
 
-    // Real-time updates — tenant room membership is resolved server-side
-    // from this same token; the client never declares which tenant/room
-    // to join (ARCHITECTURE.md §9).
     const socket: Socket = io(WS_BASE, { auth: { token } });
     socket.on('order.status_changed', () => {
-      refresh(); // resync via REST rather than trusting the event payload alone (TESTING.md §13)
+      refresh();
     });
     return () => {
       socket.disconnect();
@@ -58,61 +63,54 @@ export default function CoordinatorPage() {
   }, [refresh, router]);
 
   async function advance(order: OrderRow) {
-    const next = NEXT_STATUS[order.status];
-    if (!next) return;
-    await api.updateOrderStatus(order.id, next);
-    refresh();
-  }
-
-  function logout() {
-    clearToken();
-    router.push('/login');
+    if (!NEXT_STATUS[order.status]) return;
+    try {
+      await api.updateOrderStatus(order.id, NEXT_STATUS[order.status]);
+      refresh();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setError(message);
+    }
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
-      <div className="max-w-3xl mx-auto">
-        <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-slate-900">Coordinator — active orders</h1>
-          <button onClick={logout} className="text-sm text-slate-500 hover:underline">
-            Sign out
-          </button>
-        </div>
-        {error && <p className="text-red-600 text-sm mb-4">{error}</p>}
-        <div className="space-y-3">
-          {orders.length === 0 && (
-            <p className="text-slate-400 text-sm">No active orders right now.</p>
-          )}
-          {orders.map((o) => (
-            <div
-              key={o.id}
-              className="bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between"
-            >
-              <div>
-                <p className="text-3xl font-bold text-slate-900">
-                  {String(o.display_number).padStart(3, '0')}
-                </p>
-                <p className="text-sm text-slate-500">
-                  #{o.order_number} · {o.order_type} · ₹{o.total}
-                </p>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-700">
-                  {o.status}
-                </span>
-                {NEXT_STATUS[o.status] && (
-                  <button
-                    onClick={() => advance(o)}
-                    className="bg-slate-900 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-800"
-                  >
-                    Mark {NEXT_STATUS[o.status]}
-                  </button>
-                )}
-              </div>
+    <PageShell title="Coordinator" subtitle="Track and advance active orders.">
+      <ErrorText>{error}</ErrorText>
+      <div className="space-y-3">
+        {orders.length === 0 && (
+          <div className="text-center py-12 text-slate-400 text-sm border border-dashed border-slate-200 rounded-2xl bg-white">
+            No active orders right now.
+          </div>
+        )}
+        {orders.map((o) => (
+          <div
+            key={o.id}
+            className="bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between shadow-sm"
+          >
+            <div>
+              <p className="text-3xl font-bold text-slate-900">
+                {String(o.display_number).padStart(3, '0')}
+              </p>
+              <p className="text-sm text-slate-500">
+                #{o.order_number} · {o.order_type} · ₹{o.total}
+              </p>
             </div>
-          ))}
-        </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold px-3 py-1 rounded-full bg-slate-100 text-slate-700">
+                {o.status}
+              </span>
+              {NEXT_STATUS[o.status] && (
+                <button
+                  onClick={() => advance(o)}
+                  className="bg-slate-900 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-800 transition-colors"
+                >
+                  Mark {NEXT_STATUS[o.status]}
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
-    </main>
+    </PageShell>
   );
 }

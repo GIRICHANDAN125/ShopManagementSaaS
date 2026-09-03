@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, getToken, ApiError } from '@/lib/api';
+import { api, getToken, ApiError, decodeTokenPayload } from '@/lib/api';
 import {
   PageShell,
   Card,
@@ -55,7 +55,22 @@ export default function ShopAdminPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!getToken()) router.push('/login');
+    const token = getToken();
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+    const payload = decodeTokenPayload(token);
+    const perms = payload?.permissions || [];
+    const hasAdminPerm =
+      payload?.isSuperAdmin ||
+      perms.includes('shop.settings') ||
+      perms.includes('employee.manage') ||
+      perms.includes('product.manage') ||
+      perms.includes('*');
+    if (!hasAdminPerm) {
+      router.push('/counter');
+    }
   }, [router]);
 
   function handleError(err: unknown) {

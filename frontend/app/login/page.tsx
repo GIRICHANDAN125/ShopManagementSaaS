@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, ApiError, setToken } from '@/lib/api';
+import { api, ApiError, setToken, decodeTokenPayload } from '@/lib/api';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -16,9 +16,26 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const { accessToken } = await api.tenantLogin(shopCode, username, password);
+      const { accessToken } = await api.tenantLogin(shopCode.trim(), username.trim(), password);
       setToken(accessToken);
-      router.push('/counter');
+      const payload = decodeTokenPayload(accessToken);
+      const perms = payload?.permissions || [];
+      if (
+        perms.includes('shop.settings') ||
+        perms.includes('employee.manage') ||
+        perms.includes('product.manage') ||
+        perms.includes('*')
+      ) {
+        router.push('/admin');
+      } else if (perms.includes('order.create')) {
+        router.push('/counter');
+      } else if (perms.includes('order.view')) {
+        router.push('/kitchen');
+      } else if (perms.includes('reports.view')) {
+        router.push('/reports');
+      } else {
+        router.push('/counter');
+      }
     } catch (err) {
       const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
       setError(message ?? 'Login failed');

@@ -1,7 +1,8 @@
 'use client';
-import { ReactNode } from 'react';
-import { useRouter } from 'next/navigation';
-import { clearToken } from './api';
+import { ReactNode, useEffect, useState } from 'react';
+import { useRouter, usePathname } from 'next/navigation';
+import Link from 'next/link';
+import { clearToken, getToken, decodeTokenPayload, TokenPayload } from './api';
 
 export function PageShell({
   title,
@@ -17,12 +18,139 @@ export function PageShell({
   wide?: boolean;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const [userPayload, setUserPayload] = useState<TokenPayload | null>(null);
+
+  useEffect(() => {
+    const token = getToken();
+    if (token) {
+      setUserPayload(decodeTokenPayload(token));
+    }
+  }, []);
+
   function logout() {
     clearToken();
     router.push('/login');
   }
+
+  const permissions = userPayload?.permissions || [];
+  const isSuperAdmin = !!userPayload?.isSuperAdmin;
+
+  // Determine authorized navigation items
+  const navItems = [
+    {
+      label: 'Counter',
+      href: '/counter',
+      visible: isSuperAdmin || permissions.includes('order.create') || permissions.includes('*'),
+    },
+    {
+      label: 'Coordinator',
+      href: '/coordinator',
+      visible: isSuperAdmin || permissions.includes('order.view') || permissions.includes('*'),
+    },
+    {
+      label: 'Kitchen',
+      href: '/kitchen',
+      visible: isSuperAdmin || permissions.includes('order.view') || permissions.includes('*'),
+    },
+    {
+      label: 'Reports',
+      href: '/reports',
+      visible: isSuperAdmin || permissions.includes('reports.view') || permissions.includes('*'),
+    },
+    {
+      label: 'Shop Admin',
+      href: '/admin',
+      visible:
+        isSuperAdmin ||
+        permissions.includes('shop.settings') ||
+        permissions.includes('employee.manage') ||
+        permissions.includes('product.manage') ||
+        permissions.includes('*'),
+    },
+    {
+      label: 'TV Display',
+      href: '/tv',
+      visible: true,
+    },
+  ].filter((item) => item.visible);
+
+  const isShopAdmin =
+    permissions.includes('shop.settings') ||
+    permissions.includes('employee.manage') ||
+    permissions.includes('product.manage') ||
+    permissions.includes('*');
+
   return (
-    <main className={dark ? 'min-h-screen bg-slate-950' : 'min-h-screen bg-slate-50'}>
+    <main className={dark ? 'min-h-screen bg-slate-950 text-slate-100' : 'min-h-screen bg-slate-50 text-slate-900'}>
+      {/* Top Tenant Navigation Bar */}
+      {userPayload && (
+        <nav
+          className={`border-b ${
+            dark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+          } px-6 py-2.5 shadow-sm`}
+        >
+          <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-1 sm:gap-2">
+              <span
+                className={`text-xs font-bold px-2 py-1 rounded ${
+                  isShopAdmin
+                    ? 'bg-purple-100 text-purple-800 border border-purple-200'
+                    : 'bg-slate-100 text-slate-700 border border-slate-200'
+                }`}
+              >
+                {isSuperAdmin ? 'Platform' : isShopAdmin ? 'Shop Admin' : 'Shop Staff'}
+              </span>
+
+              <div className="flex items-center gap-1 overflow-x-auto ml-2">
+                {navItems.map((item) => {
+                  const isActive = pathname === item.href;
+                  return (
+                    <Link
+                      key={item.href}
+                      href={item.href}
+                      className={`text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors whitespace-nowrap ${
+                        isActive
+                          ? dark
+                            ? 'bg-slate-800 text-white shadow-sm'
+                            : 'bg-slate-900 text-white shadow-sm'
+                          : dark
+                            ? 'text-slate-400 hover:text-white hover:bg-slate-800/50'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                      }`}
+                    >
+                      {item.label}
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              {isSuperAdmin && (
+                <Link
+                  href="/super-admin"
+                  className="text-xs font-semibold text-indigo-600 hover:underline"
+                >
+                  Super Admin Console →
+                </Link>
+              )}
+              <button
+                onClick={logout}
+                className={`text-xs font-medium px-2.5 py-1 rounded-md transition-colors ${
+                  dark
+                    ? 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                }`}
+              >
+                Sign out
+              </button>
+            </div>
+          </div>
+        </nav>
+      )}
+
+      {/* Main Page Container */}
       <div className={`mx-auto px-6 py-8 ${wide ? 'max-w-6xl' : 'max-w-3xl'}`}>
         <header className="flex items-start justify-between mb-8">
           <div>
@@ -39,14 +167,16 @@ export function PageShell({
               </p>
             )}
           </div>
-          <button
-            onClick={logout}
-            className={`text-sm font-medium ${
-              dark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            Sign out
-          </button>
+          {!userPayload && (
+            <button
+              onClick={logout}
+              className={`text-sm font-medium ${
+                dark ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              Sign out
+            </button>
+          )}
         </header>
         {children}
       </div>

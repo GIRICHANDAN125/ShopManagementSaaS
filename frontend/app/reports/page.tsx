@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, getToken, ApiError } from '@/lib/api';
+import { api, getToken, ApiError, decodeTokenPayload } from '@/lib/api';
 import { PageShell, Card, ErrorText } from '@/lib/ui';
 
 interface Summary {
@@ -43,7 +43,14 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!getToken()) {
+    const token = getToken();
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+    const payload = decodeTokenPayload(token);
+    const perms = payload?.permissions || [];
+    if (!payload?.isSuperAdmin && !perms.includes('reports.view') && !perms.includes('*')) {
       router.push('/login');
       return;
     }
