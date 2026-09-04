@@ -17,6 +17,7 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { accessToken } = await api.tenantLogin(shopCode.trim(), username.trim(), password);
+      window.localStorage.setItem('shopapp_username', username);
       setToken(accessToken);
       const payload = decodeTokenPayload(accessToken);
       const perms = payload?.permissions || [];

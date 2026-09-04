@@ -15,6 +15,7 @@ import { CatalogModule } from './catalog/catalog.module';
 import { EmployeesModule } from './employees/employees.module';
 import { SettingsModule } from './settings/settings.module';
 import { ReportsModule } from './reports/reports.module';
+import { CountersModule } from './counters/counters.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { ReportsModule } from './reports/reports.module';
     EmployeesModule,
     SettingsModule,
     ReportsModule,
+    CountersModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   Injectable,
   Module,
@@ -40,12 +41,12 @@ export class EmployeesService {
       const res = await client.query(
         `SELECT u.id, u.username, u.display_name, u.status,
                 COALESCE(array_agg(r.name) FILTER (WHERE r.name IS NOT NULL), '{}') AS roles
-         FROM users u
-         LEFT JOIN user_roles ur ON ur.user_id = u.id
-         LEFT JOIN roles r ON r.id = ur.role_id
-         WHERE u.tenant_id = $1
-         GROUP BY u.id
-         ORDER BY u.username`,
+          FROM users u
+          LEFT JOIN user_roles ur ON ur.user_id = u.id
+          LEFT JOIN roles r ON r.id = ur.role_id
+          WHERE u.tenant_id = $1
+          GROUP BY u.id
+          ORDER BY u.username`,
         [tenantId],
       );
       return res.rows;
@@ -55,6 +56,28 @@ export class EmployeesService {
   async createEmployee(tenantId: string, actorUserId: string, dto: CreateEmployeeDto) {
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
     const user = await this.db.withTenant(tenantId, async (client) => {
+      // Concurrency/race safety: Acquire row lock on tenant_resource_limits
+      const limitRes = await client.query(
+        `SELECT max_employees FROM tenant_resource_limits WHERE tenant_id = $1 FOR UPDATE`,
+        [tenantId],
+      );
+      const maxEmployees = limitRes.rows[0]?.max_employees ?? 5;
+
+      const countRes = await client.query(
+        `SELECT count(*) FROM users WHERE tenant_id = $1 AND status = 'active'`,
+        [tenantId],
+      );
+      const activeCount = Number(countRes.rows[0].count);
+
+      if (activeCount >= maxEmployees) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          code: 'RESOURCE_LIMIT_REACHED',
+          message: `Employee limit reached. Your shop is allowed ${maxEmployees} employees.`,
+        });
+      }
+
       const res = await client.query(
         `INSERT INTO users (tenant_id, username, password_hash, display_name, status)
          VALUES ($1,$2,$3,$4,'active') RETURNING id, username, display_name`,

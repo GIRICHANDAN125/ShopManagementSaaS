@@ -82,12 +82,60 @@ export class SettingsService {
     });
     return dto;
   }
+
+  async getResourceUsageAndLimits(tenantId: string) {
+    return this.db.withTenant(tenantId, async (client) => {
+      const limitsRes = await client.query(
+        `SELECT max_employees, max_counters, max_customer_displays, max_printers
+         FROM tenant_resource_limits
+         WHERE tenant_id = $1`,
+        [tenantId],
+      );
+      const limits = limitsRes.rows[0] ?? {
+        max_employees: 5,
+        max_counters: 1,
+        max_customer_displays: 1,
+        max_printers: 1,
+      };
+
+      const usageRes = await client.query(
+        `SELECT
+          (SELECT count(*) FROM users WHERE tenant_id = $1 AND status = 'active') AS active_employees,
+          (SELECT count(*) FROM counters WHERE tenant_id = $1 AND status = 'active') AS active_counters,
+          (SELECT count(*) FROM devices WHERE tenant_id = $1 AND type = 'customer_display' AND status = 'active') AS active_displays,
+          (SELECT count(*) FROM printers WHERE tenant_id = $1 AND status = 'active') AS active_printers`,
+        [tenantId],
+      );
+      const usage = usageRes.rows[0];
+
+      return {
+        limits: {
+          max_employees: Number(limits.max_employees),
+          max_counters: Number(limits.max_counters),
+          max_customer_displays: Number(limits.max_customer_displays),
+          max_printers: Number(limits.max_printers),
+        },
+        usage: {
+          active_employees: Number(usage.active_employees),
+          active_counters: Number(usage.active_counters),
+          active_displays: Number(usage.active_displays),
+          active_printers: Number(usage.active_printers),
+        },
+      };
+    });
+  }
 }
 
 @Controller('settings')
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class SettingsController {
   constructor(private readonly settings: SettingsService) {}
+
+  @Get('resource-usage')
+  @RequirePermission('order.view')
+  async getResourceUsage(@Req() req: any) {
+    return this.settings.getResourceUsageAndLimits(req.user.tenantId);
+  }
 
   @Get('packing')
   @RequirePermission('order.view')

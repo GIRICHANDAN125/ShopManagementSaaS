@@ -69,7 +69,7 @@ export function PageShell({
         permissions.includes('*'),
     },
     {
-      label: 'TV Display',
+      label: 'Customer Display',
       href: '/tv',
       visible: true,
     },
@@ -93,13 +93,15 @@ export function PageShell({
           <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-1 sm:gap-2">
               <span
-                className={`text-xs font-bold px-2 py-1 rounded ${
-                  isShopAdmin
+                className={`text-xs font-semibold px-2.5 py-0.5 rounded-full ${
+                  isSuperAdmin
+                    ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                    : isShopAdmin
                     ? 'bg-purple-100 text-purple-800 border border-purple-200'
                     : 'bg-slate-100 text-slate-700 border border-slate-200'
                 }`}
               >
-                {isSuperAdmin ? 'Platform' : isShopAdmin ? 'Shop Admin' : 'Shop Staff'}
+                {isSuperAdmin ? 'Platform Admin' : isShopAdmin ? 'Role: Shop Admin' : 'Role: Staff'}
               </span>
 
               <div className="flex items-center gap-1 overflow-x-auto ml-2">

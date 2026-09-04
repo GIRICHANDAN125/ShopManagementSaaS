@@ -1,4 +1,4 @@
-import { Injectable, Module, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Module, OnModuleDestroy, UnauthorizedException } from '@nestjs/common';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -23,7 +23,7 @@ import { JwtModule } from '@nestjs/jwt';
  */
 @Injectable()
 @WebSocketGateway({ cors: { origin: '*' } }) // dev default; DEPLOYMENT.md restricts this per-environment
-export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect, OnModuleDestroy {
   @WebSocketServer() server: Server;
 
   constructor(private readonly jwt: JwtService, private readonly config: ConfigService) {}
@@ -51,6 +51,12 @@ export class RealtimeGateway implements OnGatewayConnection, OnGatewayDisconnect
 
   handleDisconnect() {
     /* no-op: room membership is cleaned up automatically by socket.io */
+  }
+
+  onModuleDestroy() {
+    if (this.server) {
+      this.server.close();
+    }
   }
 
   /** Called by OrdersService/DevicesService after a state change — never

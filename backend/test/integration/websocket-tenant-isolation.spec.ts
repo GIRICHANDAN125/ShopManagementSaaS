@@ -125,61 +125,83 @@ describe('WebSocket tenant isolation (real Socket.IO, real listening server)', (
   function connectSocket(token: string): Promise<Socket> {
     return new Promise((resolve, reject) => {
       const socket = io(`http://localhost:${port}`, { auth: { token }, reconnection: false });
-      socket.on('connect', () => resolve(socket));
-      socket.on('connect_error', reject);
-      setTimeout(() => reject(new Error('connect timeout')), 5000);
+      const timer = setTimeout(() => {
+        socket.close();
+        reject(new Error('connect timeout'));
+      }, 5000);
+      socket.on('connect', () => {
+        clearTimeout(timer);
+        resolve(socket);
+      });
+      socket.on('connect_error', (err) => {
+        clearTimeout(timer);
+        socket.close();
+        reject(err);
+      });
     });
   }
 
   it('a Tenant A order-status event is received by Tenant A socket but NEVER by Tenant B socket', async () => {
     const socketA = await connectSocket(tokenA);
     const socketB = await connectSocket(tokenB);
+    try {
+      const receivedByA: unknown[] = [];
+      const receivedByB: unknown[] = [];
+      socketA.on('order.status_changed', (p) => receivedByA.push(p));
+      socketB.on('order.status_changed', (p) => receivedByB.push(p));
 
-    const receivedByA: unknown[] = [];
-    const receivedByB: unknown[] = [];
-    socketA.on('order.status_changed', (p) => receivedByA.push(p));
-    socketB.on('order.status_changed', (p) => receivedByB.push(p));
+      // Create and advance a Tenant A order — this triggers
+      // RealtimeGateway.emitOrderStatusChanged(TENANT_A, ...) via
+      // OrdersService.updateStatus.
+      const orderRes = await request(app.getHttpServer())
+        .post('/orders')
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({
+          idempotencyKey: 'f1a1a8b2-2222-4a11-9a11-abcdefabcdef',
+          items: [{ productId: productIdA, quantity: 1 }],
+          orderType: 'dine_in',
+        });
+      await request(app.getHttpServer())
+        .post(`/orders/${orderRes.body.id}/status`)
+        .set('Authorization', `Bearer ${tokenA}`)
+        .send({ status: 'PREPARING' });
 
-    // Create and advance a Tenant A order — this triggers
-    // RealtimeGateway.emitOrderStatusChanged(TENANT_A, ...) via
-    // OrdersService.updateStatus.
-    const orderRes = await request(app.getHttpServer())
-      .post('/orders')
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({
-        idempotencyKey: 'f1a1a8b2-2222-4a11-9a11-abcdefabcdef',
-        items: [{ productId: productIdA, quantity: 1 }],
-        orderType: 'dine_in',
-      });
-    await request(app.getHttpServer())
-      .post(`/orders/${orderRes.body.id}/status`)
-      .set('Authorization', `Bearer ${tokenA}`)
-      .send({ status: 'PREPARING' });
+      // Give the event loop a moment to deliver the socket event.
+      await new Promise((r) => setTimeout(r, 500));
 
-    // Give the event loop a moment to deliver the socket event.
-    await new Promise((r) => setTimeout(r, 500));
-
-    expect(receivedByA.length).toBeGreaterThanOrEqual(1);
-    expect(receivedByB.length).toBe(0); // the entire point of tenant-scoped rooms
-
-    socketA.disconnect();
-    socketB.disconnect();
+      expect(receivedByA.length).toBeGreaterThanOrEqual(1);
+      expect(receivedByB.length).toBe(0); // the entire point of tenant-scoped rooms
+    } finally {
+      socketA.close();
+      socketB.close();
+    }
   }, 15000);
 
   it('a connection with no token is rejected (disconnected) rather than joined to any room', async () => {
     const socket = io(`http://localhost:${port}`, { auth: {}, reconnection: false });
-    const disconnected = new Promise<void>((resolve) => {
-      socket.on('disconnect', () => resolve());
-      socket.on('connect', () => {
-        // If it connects at all without a token, that is itself the
-        // failure this test exists to catch.
+    try {
+      let timeoutTimer: NodeJS.Timeout;
+      const timeoutPromise = new Promise<void>((r) => {
+        timeoutTimer = setTimeout(r, 3000);
       });
-    });
-    await Promise.race([
-      disconnected,
-      new Promise((r) => setTimeout(r, 3000)),
-    ]);
-    expect(socket.connected).toBe(false);
+      const disconnected = new Promise<void>((resolve) => {
+        socket.on('disconnect', () => {
+          clearTimeout(timeoutTimer);
+          resolve();
+        });
+        socket.on('connect', () => {
+          // If it connects at all without a token, that is itself the
+          // failure this test exists to catch.
+        });
+      });
+      await Promise.race([
+        disconnected,
+        timeoutPromise,
+      ]);
+      expect(socket.connected).toBe(false);
+    } finally {
+      socket.close();
+    }
   }, 8000);
 
   it('a connection with an invalid/garbage token is rejected', async () => {
@@ -187,7 +209,11 @@ describe('WebSocket tenant isolation (real Socket.IO, real listening server)', (
       auth: { token: 'not-a-real-jwt' },
       reconnection: false,
     });
-    await new Promise((r) => setTimeout(r, 1000));
-    expect(socket.connected).toBe(false);
+    try {
+      await new Promise((r) => setTimeout(r, 1000));
+      expect(socket.connected).toBe(false);
+    } finally {
+      socket.close();
+    }
   }, 8000);
 });

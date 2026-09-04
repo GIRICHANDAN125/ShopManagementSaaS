@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  Get,
   Injectable,
   Module,
   Param,
@@ -10,7 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IsString, IsUUID, IsInt, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsUUID, IsInt, IsOptional, Min, Max, IsIn } from 'class-validator';
 import * as crypto from 'crypto';
 import { JwtModule, JwtService } from '@nestjs/jwt';
 import { ConfigModule, ConfigService } from '@nestjs/config';
@@ -36,6 +37,7 @@ function hashCredential(rawSecret: string, pepper: string): string {
 export class RegisterDeviceDto {
   @IsString() name: string;
   @IsOptional() @IsUUID() counterId?: string;
+  @IsOptional() @IsIn(['counter', 'customer_display']) type?: 'counter' | 'customer_display';
 }
 
 export class ReserveRangeDto {
@@ -57,12 +59,37 @@ export class DevicesService {
     const rawSecret = crypto.randomBytes(32).toString('hex');
     const pepper = process.env.DEVICE_CREDENTIAL_PEPPER ?? '';
     const credentialHash = hashCredential(rawSecret, pepper);
+    const devType = dto.type ?? 'counter';
 
     const device = await this.db.withTenant(tenantId, async (client) => {
+      if (devType === 'customer_display') {
+        // Concurrency safety: lock tenant resource limits row
+        const limitRes = await client.query(
+          `SELECT max_customer_displays FROM tenant_resource_limits WHERE tenant_id = $1 FOR UPDATE`,
+          [tenantId],
+        );
+        const maxDisplays = limitRes.rows[0]?.max_customer_displays ?? 1;
+
+        const countRes = await client.query(
+          `SELECT count(*) FROM devices WHERE tenant_id = $1 AND type = 'customer_display' AND status = 'active'`,
+          [tenantId],
+        );
+        const activeCount = Number(countRes.rows[0].count);
+
+        if (activeCount >= maxDisplays) {
+          throw new ForbiddenException({
+            statusCode: 403,
+            error: 'Forbidden',
+            code: 'RESOURCE_LIMIT_REACHED',
+            message: `Customer Display limit reached. Your shop is allowed ${maxDisplays} display(s).`,
+          });
+        }
+      }
+
       const res = await client.query(
-        `INSERT INTO devices (tenant_id, counter_id, name, credential_hash, status)
-         VALUES ($1,$2,$3,$4,'active') RETURNING id, name, status`,
-        [tenantId, dto.counterId ?? null, dto.name, credentialHash],
+        `INSERT INTO devices (tenant_id, counter_id, name, type, credential_hash, status)
+         VALUES ($1,$2,$3,$4,$5,'active') RETURNING id, name, type, status`,
+        [tenantId, dto.counterId ?? null, dto.name, devType, credentialHash],
       );
       const created = res.rows[0];
       // Non-sensitive routing entry — see migration 0010 for why this
@@ -80,10 +107,23 @@ export class DevicesService {
       action: 'device.register',
       entityType: 'device',
       entityId: device.id,
-      metadata: { name: dto.name },
+      metadata: { name: dto.name, type: devType },
     });
 
     return { device, credential: rawSecret }; // shown once
+  }
+
+  async listDevices(tenantId: string) {
+    return this.db.withTenant(tenantId, async (client) => {
+      const res = await client.query(
+        `SELECT id, name, type, counter_id, status, registered_at, revoked_at
+         FROM devices
+         WHERE tenant_id = $1
+         ORDER BY registered_at DESC`,
+        [tenantId],
+      );
+      return res.rows;
+    });
   }
 
   async revokeDevice(tenantId: string, actorUserId: string, deviceId: string) {
@@ -248,6 +288,12 @@ export class DevicesService {
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 export class DevicesController {
   constructor(private readonly devices: DevicesService) {}
+
+  @Get()
+  @RequirePermission('device.manage')
+  async list(@Req() req: any) {
+    return this.devices.listDevices(req.user.tenantId);
+  }
 
   @Post()
   @RequirePermission('device.manage')

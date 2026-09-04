@@ -6,6 +6,7 @@ import {
   Controller,
   Post,
   Body,
+  HttpCode,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -99,7 +100,7 @@ export class AuthService {
 
     const user = await this.db.withTenant(tenantId, async (client) => {
       const res = await client.query(
-        `SELECT id, password_hash, status FROM users WHERE tenant_id = $1 AND username = $2`,
+        `SELECT id, username, display_name, password_hash, status FROM users WHERE tenant_id = $1 AND username = $2`,
         [tenantId, dto.username],
       );
       return res.rows[0] ?? null;
@@ -124,12 +125,30 @@ export class AuthService {
       return res.rows.map((r) => r.code as string);
     });
 
-    return this.issueTokens({
+    const assignedCounter = await this.db.withTenant(tenantId, async (client) => {
+      const res = await client.query(
+        `SELECT id, name, code FROM counters WHERE tenant_id = $1 AND assigned_user_id = $2 AND status = 'active' LIMIT 1`,
+        [tenantId, user.id],
+      );
+      return res.rows[0] ?? null;
+    });
+
+    const tokens = await this.issueTokens({
       sub: user.id,
       tenantId,
       isSuperAdmin: false,
       permissions,
     });
+
+    return {
+      ...tokens,
+      user: {
+        id: user.id,
+        username: user.username,
+        displayName: user.display_name,
+      },
+      assignedCounter,
+    };
   }
 
   /**
@@ -192,7 +211,10 @@ export class AuthService {
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(config: ConfigService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        ExtractJwt.fromUrlQueryParameter('token'),
+      ]),
       ignoreExpiration: false,
       secretOrKey: config.get('JWT_ACCESS_SECRET') as string,
     });
@@ -216,11 +238,13 @@ export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('login')
+  @HttpCode(200)
   async login(@Body() dto: TenantLoginDto) {
     return this.authService.tenantLogin(dto);
   }
 
   @Post('super-admin/login')
+  @HttpCode(200)
   async superAdminLogin(@Body() dto: SuperAdminLoginDto) {
     return this.authService.superAdminLogin(dto);
   }
