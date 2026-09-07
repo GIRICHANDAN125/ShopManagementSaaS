@@ -121,4 +121,123 @@ describe('AuthService Password Security & Error Handling', () => {
       await expect(authService.superAdminLogin(dto)).rejects.toThrow(UnauthorizedException);
     });
   });
+
+  describe('Password Change & mustChangePassword Flow', () => {
+    it('tenantLogin passes mustChangePassword: true when flagged in users table', async () => {
+      mockDb.tenantPool.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'tenant-uuid-1', status: 'active' }],
+      });
+
+      const validHash = await argon2.hash('TempPassword123!', { type: argon2.argon2id });
+      mockDb.withTenant.mockImplementation(async (_tenantId: string, fn: any) => {
+        return fn({
+          query: jest.fn()
+            .mockResolvedValueOnce({
+              rows: [{
+                id: 'user-uuid-1',
+                username: 'admin',
+                display_name: 'Shop Admin',
+                password_hash: validHash,
+                status: 'active',
+                must_change_password: true,
+              }],
+            })
+            .mockResolvedValueOnce({ rows: [{ code: 'order.create' }] }) // permissions
+            .mockResolvedValueOnce({ rows: [] }), // counters
+        });
+      });
+
+      const result = await authService.tenantLogin({
+        shopCode: 'ACTIVE_SHOP',
+        username: 'admin',
+        password: 'TempPassword123!',
+      });
+
+      expect(result.user.mustChangePassword).toBe(true);
+      expect(mockJwt.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ mustChangePassword: true }),
+        expect.any(Object),
+      );
+    });
+
+    it('tenantLogin throws UnauthorizedException (401) when shop is inactive', async () => {
+      mockDb.tenantPool.query.mockResolvedValueOnce({
+        rowCount: 1,
+        rows: [{ id: 'tenant-uuid-1', status: 'inactive' }],
+      });
+
+      await expect(
+        authService.tenantLogin({
+          shopCode: 'INACTIVE_SHOP',
+          username: 'admin',
+          password: 'Password123!',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('changePassword throws BadRequestException if new password equals current password', async () => {
+      await expect(
+        authService.changePassword(
+          { sub: 'user-1', tenantId: 'tenant-1', isSuperAdmin: false, permissions: [] },
+          { currentPassword: 'SamePassword123!', newPassword: 'SamePassword123!' },
+        ),
+      ).rejects.toThrow('New password must be different from current password');
+    });
+
+    it('changePassword throws UnauthorizedException if current password is incorrect', async () => {
+      const storedHash = await argon2.hash('CorrectCurrent123!', { type: argon2.argon2id });
+      mockDb.withTenant.mockImplementationOnce(async (_tId: string, fn: any) => {
+        return fn({
+          query: jest.fn().mockResolvedValueOnce({
+            rows: [{ id: 'user-1', password_hash: storedHash, status: 'active' }],
+          }),
+        });
+      });
+
+      await expect(
+        authService.changePassword(
+          { sub: 'user-1', tenantId: 'tenant-1', isSuperAdmin: false, permissions: [] },
+          { currentPassword: 'WrongPassword!', newPassword: 'NewSecurePass123!' },
+        ),
+      ).rejects.toThrow('Current password is incorrect');
+    });
+
+    it('changePassword successfully hashes new password with Argon2id and clears must_change_password', async () => {
+      const storedHash = await argon2.hash('OldPassword123!', { type: argon2.argon2id });
+      const queryMock = jest.fn()
+        .mockResolvedValueOnce({
+          rows: [{ id: 'user-1', password_hash: storedHash, status: 'active' }],
+        })
+        .mockResolvedValueOnce({ rowCount: 1 }); // UPDATE query
+
+      mockDb.withTenant.mockImplementation(async (_tId: string, fn: any) => {
+        return fn({ query: queryMock });
+      });
+
+      const result = await authService.changePassword(
+        { sub: 'user-1', tenantId: 'tenant-1', isSuperAdmin: false, permissions: ['order.create'] },
+        { currentPassword: 'OldPassword123!', newPassword: 'NewStrongPassword123!' },
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.message).toBe('Password updated successfully');
+      expect(mockAudit.logTenant).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          actorUserId: 'user-1',
+          action: 'user.change_password',
+        }),
+      );
+
+      // Verify UPDATE was called with new hash and must_change_password = false
+      expect(queryMock).toHaveBeenCalledTimes(2);
+      const updateArgs = queryMock.mock.calls[1];
+      expect(updateArgs[0]).toContain('UPDATE users SET password_hash = $1, must_change_password = false');
+      const newHashSaved = updateArgs[1][0];
+      expect(newHashSaved.startsWith('$argon2id$')).toBe(true);
+      const verifyNew = await argon2.verify(newHashSaved, 'NewStrongPassword123!');
+      expect(verifyNew).toBe(true);
+    });
+  });
 });

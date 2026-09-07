@@ -1,7 +1,7 @@
 'use client';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { api, getToken, ApiError, decodeTokenPayload } from '@/lib/api';
+import { api, getToken, setToken, ApiError, decodeTokenPayload } from '@/lib/api';
 import {
   PageShell,
   Card,
@@ -105,6 +105,53 @@ export default function ShopAdminPage() {
   const [error, setError] = useState<string | null>(null);
   const [resourceUsage, setResourceUsage] = useState<ResourceUsageData | null>(null);
 
+  // Self-service password change state
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passError, setPassError] = useState<string | null>(null);
+  const [passSuccess, setPassSuccess] = useState<string | null>(null);
+  const [updatingPass, setUpdatingPass] = useState(false);
+
+  async function handlePasswordChange(e: React.FormEvent) {
+    e.preventDefault();
+    setPassError(null);
+    setPassSuccess(null);
+    if (newPassword.length < 6) {
+      setPassError('New password must be at least 6 characters long.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPassError('New passwords do not match.');
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPassError('New password must be different from current password.');
+      return;
+    }
+    setUpdatingPass(true);
+    try {
+      const res = await api.changePassword(currentPassword, newPassword);
+      if (res.accessToken) {
+        setToken(res.accessToken);
+      }
+      setPassSuccess('Password updated successfully.');
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => {
+        setShowPasswordModal(false);
+        setPassSuccess(null);
+      }, 2000);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setPassError(message);
+    } finally {
+      setUpdatingPass(false);
+    }
+  }
+
   const refreshResourceUsage = useCallback(async () => {
     try {
       const data = await api.getResourceUsage();
@@ -134,29 +181,128 @@ export default function ShopAdminPage() {
     refreshResourceUsage();
   }, [router, refreshResourceUsage]);
 
-  function handleError(err: unknown) {
+  const handleError = useCallback((err: unknown) => {
     setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err));
-  }
+  }, []);
 
   return (
     <PageShell title="Shop Admin" subtitle="Configure your shop, resources, and catalog." wide>
-      <div className="flex gap-1 mb-6 border-b border-slate-200 overflow-x-auto">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors whitespace-nowrap ${
-              tab === t.id
-                ? 'border-slate-900 text-slate-900'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="flex items-center justify-between mb-6 border-b border-slate-200">
+        <div className="flex gap-1 overflow-x-auto overflow-y-hidden py-0.5 scroll-smooth">
+          {TABS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTab(t.id)}
+              className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-0.5 transition-colors whitespace-nowrap ${
+                tab === t.id
+                  ? 'border-slate-900 text-slate-900'
+                  : 'border-transparent text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowPasswordModal(true)}
+          className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700 transition-colors whitespace-nowrap ml-4 mb-2"
+        >
+          Change Password
+        </button>
       </div>
 
       <ErrorText>{error}</ErrorText>
+
+      {showPasswordModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-slate-200">
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-slate-900 text-lg">Change Admin Password</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Update your login password securely.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowPasswordModal(false);
+                  setPassError(null);
+                  setPassSuccess(null);
+                }}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                ✕
+              </button>
+            </div>
+
+            {passSuccess && (
+              <div className="mb-4 p-3 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-semibold">
+                ✓ {passSuccess}
+              </div>
+            )}
+
+            {passError && (
+              <div className="mb-4 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs">
+                {passError}
+              </div>
+            )}
+
+            <form onSubmit={handlePasswordChange} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Current Password</label>
+                <input
+                  type="password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">New Password (min. 6 characters)</label>
+                <input
+                  type="password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  required
+                  minLength={6}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Confirm New Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900"
+                  required
+                  minLength={6}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordModal(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={updatingPass}
+                  className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold shadow-xs transition-colors disabled:opacity-50"
+                >
+                  {updatingPass ? 'Updating…' : 'Update Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {tab === 'catalog' && <CatalogTab onError={handleError} />}
       {tab === 'employees' && (
@@ -482,16 +628,30 @@ function EmployeesTab({
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [creating, setCreating] = useState(false);
+
+  const loadingRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const onRefreshUsageRef = useRef(onRefreshUsage);
+  onRefreshUsageRef.current = onRefreshUsage;
 
   const refresh = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
-      setEmployees(await api.listEmployees());
-      setRoles(await api.listRoles());
-      onRefreshUsage();
+      const [empList, roleList] = await Promise.all([
+        api.listEmployees(),
+        api.listRoles(),
+      ]);
+      setEmployees(empList);
+      setRoles(roleList);
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      loadingRef.current = false;
     }
-  }, [onError, onRefreshUsage]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -502,16 +662,20 @@ function EmployeesTab({
   const limitReached = activeCount >= maxLimit;
 
   async function addEmployee() {
-    if (!username || !displayName || !password) return;
+    if (!username || !displayName || !password || creating) return;
+    setCreating(true);
     try {
       await api.createEmployee({ username, displayName, password, roleIds: selectedRoles });
       setUsername('');
       setDisplayName('');
       setPassword('');
       setSelectedRoles([]);
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      setCreating(false);
     }
   }
 
@@ -618,17 +782,27 @@ function CountersTab({
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [assignedUserId, setAssignedUserId] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const loadingRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const onRefreshUsageRef = useRef(onRefreshUsage);
+  onRefreshUsageRef.current = onRefreshUsage;
 
   const refresh = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       const [cList, eList] = await Promise.all([api.listCounters(), api.listEmployees()]);
       setCounters(cList);
       setEmployees(eList.filter((e: EmployeeRow) => e.status === 'active'));
-      onRefreshUsage();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      loadingRef.current = false;
     }
-  }, [onError, onRefreshUsage]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -639,7 +813,8 @@ function CountersTab({
   const limitReached = activeCount >= maxLimit;
 
   async function addCounter() {
-    if (!name || !code) return;
+    if (!name || !code || saving) return;
+    setSaving(true);
     try {
       await api.createCounter({
         name,
@@ -649,9 +824,12 @@ function CountersTab({
       setName('');
       setCode('');
       setAssignedUserId('');
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -659,18 +837,19 @@ function CountersTab({
     try {
       const nextStatus = counter.status === 'active' ? 'inactive' : 'active';
       await api.updateCounter(counter.id, { status: nextStatus });
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
     }
   }
 
   async function updateStaffAssignment(counterId: string, userId: string) {
     try {
       await api.updateCounter(counterId, { assignedUserId: userId || null });
-      refresh();
+      await refresh();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
     }
   }
 
@@ -814,15 +993,25 @@ function DevicesTab({
   const [lastCredential, setLastCredential] = useState<{ name: string; credential: string } | null>(
     null,
   );
+  const [registering, setRegistering] = useState(false);
+
+  const loadingRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const onRefreshUsageRef = useRef(onRefreshUsage);
+  onRefreshUsageRef.current = onRefreshUsage;
 
   const refresh = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       setDevices(await api.listDevices());
-      onRefreshUsage();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      loadingRef.current = false;
     }
-  }, [onError, onRefreshUsage]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -833,14 +1022,18 @@ function DevicesTab({
   const displayLimitReached = deviceType === 'customer_display' && activeDisplays >= maxDisplays;
 
   async function register() {
-    if (!deviceName) return;
+    if (!deviceName || registering) return;
+    setRegistering(true);
     try {
       const res = await api.registerDevice(deviceName, deviceType);
       setLastCredential({ name: res.device.name, credential: res.credential });
       setDeviceName('');
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      setRegistering(false);
     }
   }
 
@@ -943,15 +1136,25 @@ function PrintersTab({
   const [name, setName] = useState('');
   const [type, setType] = useState('thermal_receipt');
   const [location, setLocation] = useState('');
+  const [adding, setAdding] = useState(false);
+
+  const loadingRef = useRef(false);
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+  const onRefreshUsageRef = useRef(onRefreshUsage);
+  onRefreshUsageRef.current = onRefreshUsage;
 
   const refresh = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     try {
       setPrinters(await api.listPrinters());
-      onRefreshUsage();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      loadingRef.current = false;
     }
-  }, [onError, onRefreshUsage]);
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -962,14 +1165,18 @@ function PrintersTab({
   const limitReached = activeCount >= maxLimit;
 
   async function addPrinter() {
-    if (!name) return;
+    if (!name || adding) return;
+    setAdding(true);
     try {
       await api.createPrinter({ name, type, location: location || undefined });
       setName('');
       setLocation('');
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
+    } finally {
+      setAdding(false);
     }
   }
 
@@ -977,9 +1184,10 @@ function PrintersTab({
     try {
       const nextStatus = p.status === 'active' ? 'inactive' : 'active';
       await api.updatePrinter(p.id, { status: nextStatus });
-      refresh();
+      await refresh();
+      onRefreshUsageRef.current();
     } catch (e) {
-      onError(e);
+      onErrorRef.current(e);
     }
   }
 

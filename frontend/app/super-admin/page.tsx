@@ -51,8 +51,15 @@ export default function SuperAdminPage() {
   const [editCounters, setEditCounters] = useState(1);
   const [editDisplays, setEditDisplays] = useState(1);
   const [editPrinters, setEditPrinters] = useState(1);
-  const [editError, setEditError] = useState<string | null>(null);
   const [savingLimits, setSavingLimits] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Delete tenant modal / state
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [deletingTenant, setDeletingTenant] = useState<Tenant | null>(null);
+  const [deleteConfirmInput, setDeleteConfirmInput] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -165,6 +172,36 @@ export default function SuperAdminPage() {
     }
   }
 
+  function openDeleteModal(t: Tenant) {
+    setDeletingTenant(t);
+    setDeleteConfirmInput('');
+    setDeleteError(null);
+  }
+
+  async function handleDeleteShop() {
+    if (!deletingTenant) return;
+    const isConfirmed =
+      deleteConfirmInput.trim() === deletingTenant.display_name.trim() ||
+      deleteConfirmInput.trim() === deletingTenant.code.trim();
+    if (!isConfirmed) return;
+
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await api.deleteTenant(deletingTenant.id);
+      const deletedName = deletingTenant.display_name;
+      setDeletingTenant(null);
+      setSuccessMessage(`Shop "${deletedName}" was permanently deleted successfully.`);
+      setTimeout(() => setSuccessMessage(null), 6000);
+      refresh();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setDeleteError(message);
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   function copyCredentials() {
     if (!createdCredentials) return;
     const text = `Shop Name: ${createdCredentials.shop_name}\nShop Code: ${createdCredentials.shop_code}\nUsername: ${createdCredentials.username}\nTemporary Password: ${createdCredentials.temporary_password}`;
@@ -203,6 +240,22 @@ export default function SuperAdminPage() {
             </button>
           </div>
         </header>
+
+        {/* Success Alert Banner */}
+        {successMessage && (
+          <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-4 py-3 rounded-2xl mb-6 flex items-center justify-between text-sm shadow-xs animate-fade-in">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-emerald-600">✓</span>
+              <span>{successMessage}</span>
+            </div>
+            <button
+              onClick={() => setSuccessMessage(null)}
+              className="text-emerald-700 hover:text-emerald-900 text-xs font-semibold"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Credentials Modal / Banner */}
         {createdCredentials && (
@@ -436,21 +489,36 @@ export default function SuperAdminPage() {
                       {new Date(t.created_at).toLocaleDateString()}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-2">
                     <span
                       className={`text-xs font-semibold px-3 py-1 rounded-full ${
                         t.status === 'active'
                           ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-slate-200 text-slate-600'
+                          : 'bg-amber-100 text-amber-700'
                       }`}
                     >
-                      {t.status}
+                      {t.status === 'active' ? 'Active' : 'Inactive'}
                     </span>
                     <button
+                      type="button"
+                      onClick={() => openEditLimits(t)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
+                    >
+                      Manage
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => toggleStatus(t)}
-                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700"
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-slate-300 hover:bg-slate-50 text-slate-700 bg-white"
                     >
                       {t.status === 'active' ? 'Deactivate' : 'Activate'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openDeleteModal(t)}
+                      className="text-xs font-semibold px-3 py-1.5 rounded-lg border border-rose-200 hover:bg-rose-50 text-rose-600 hover:text-rose-700 bg-white transition-colors"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>
@@ -607,6 +675,95 @@ export default function SuperAdminPage() {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+        {/* Delete Confirmation Modal */}
+        {deletingTenant && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl border border-rose-100">
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-rose-700 bg-rose-50 border border-rose-200 px-2.5 py-0.5 rounded-full">
+                    Destructive Action
+                  </span>
+                  <h3 className="font-bold text-slate-900 text-lg mt-1.5">
+                    Delete Shop Permanently
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  disabled={isDeleting}
+                  onClick={() => setDeletingTenant(null)}
+                  className="text-slate-400 hover:text-slate-600 disabled:opacity-50"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="mb-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs leading-relaxed space-y-1.5">
+                <p className="font-bold flex items-center gap-1.5 text-rose-800">
+                  <span>⚠️</span> Permanent Deletion Warning
+                </p>
+                <p>
+                  This action is permanent and cannot be undone. All products, categories, orders, employees, counters, printers, and operational data belonging to this shop will be permanently deleted from the database.
+                </p>
+              </div>
+
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 mb-4 text-xs font-mono space-y-1">
+                <div>
+                  <span className="text-slate-400 font-sans font-semibold uppercase text-[10px] block">Shop Name</span>
+                  <span className="font-bold text-slate-900">{deletingTenant.display_name}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-sans font-semibold uppercase text-[10px] block">Shop Code</span>
+                  <span className="font-bold text-slate-900">{deletingTenant.code}</span>
+                </div>
+              </div>
+
+              {deleteError && (
+                <div className="mb-4 p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 text-xs leading-relaxed">
+                  {deleteError}
+                </div>
+              )}
+
+              <div className="space-y-3">
+                <label className="block text-xs font-semibold text-slate-700">
+                  To confirm, type <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">{deletingTenant.display_name}</span> or <span className="font-mono font-bold text-slate-900 bg-slate-100 px-1.5 py-0.5 rounded">{deletingTenant.code}</span>:
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmInput}
+                  disabled={isDeleting}
+                  onChange={(e) => setDeleteConfirmInput(e.target.value)}
+                  placeholder={`Type "${deletingTenant.display_name}" or "${deletingTenant.code}"`}
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-rose-500"
+                  autoFocus
+                />
+
+                <div className="flex items-center justify-end gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={() => setDeletingTenant(null)}
+                    className="px-4 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      isDeleting ||
+                      (deleteConfirmInput.trim() !== deletingTenant.display_name.trim() &&
+                        deleteConfirmInput.trim() !== deletingTenant.code.trim())
+                    }
+                    onClick={handleDeleteShop}
+                    className="px-5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
+                  >
+                    {isDeleting ? 'Deleting Shop…' : 'Delete Shop'}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}

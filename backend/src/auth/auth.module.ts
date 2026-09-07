@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   Logger,
   Module,
@@ -33,6 +34,11 @@ export class SuperAdminLoginDto {
   @IsString() @MinLength(1) password: string;
 }
 
+export class ChangePasswordDto {
+  @IsString() @MinLength(1) currentPassword: string;
+  @IsString() @MinLength(6) newPassword: string;
+}
+
 // ---- JWT payload shape -----------------------------------------------------
 // tenantId is ALWAYS derived server-side and embedded here at issuance time.
 // No downstream code ever accepts a tenant id from anywhere else
@@ -42,6 +48,7 @@ export interface AccessTokenPayload {
   tenantId: string | null; // null only for verified Super Admin tokens
   isSuperAdmin: boolean;
   permissions: string[];
+  mustChangePassword?: boolean;
 }
 
 // ---- Service ---------------------------------------------------------------
@@ -100,7 +107,7 @@ export class AuthService {
 
     const user = await this.db.withTenant(tenantId, async (client) => {
       const res = await client.query(
-        `SELECT id, username, display_name, password_hash, status FROM users WHERE tenant_id = $1 AND username = $2`,
+        `SELECT id, username, display_name, password_hash, status, must_change_password FROM users WHERE tenant_id = $1 AND username = $2`,
         [tenantId, dto.username],
       );
       return res.rows[0] ?? null;
@@ -138,6 +145,7 @@ export class AuthService {
       tenantId,
       isSuperAdmin: false,
       permissions,
+      mustChangePassword: !!user.must_change_password,
     });
 
     return {
@@ -146,6 +154,7 @@ export class AuthService {
         id: user.id,
         username: user.username,
         displayName: user.display_name,
+        mustChangePassword: !!user.must_change_password,
       },
       assignedCounter,
     };
@@ -189,13 +198,79 @@ export class AuthService {
     });
   }
 
+  /**
+   * Allows authenticated Shop Admin or staff to change their password.
+   * Also used during forced first-login to transition temporary password to permanent.
+   */
+  async changePassword(user: AccessTokenPayload, dto: ChangePasswordDto) {
+    if (!user || !user.sub || !user.tenantId) {
+      throw new UnauthorizedException('Invalid user context');
+    }
+
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('New password must be different from current password');
+    }
+
+    const tenantId = user.tenantId;
+    const userId = user.sub;
+
+    const userRow = await this.db.withTenant(tenantId, async (client) => {
+      const res = await client.query(
+        `SELECT id, password_hash, status FROM users WHERE id = $1 AND tenant_id = $2`,
+        [userId, tenantId],
+      );
+      return res.rows[0] ?? null;
+    });
+
+    if (!userRow || userRow.status !== 'active') {
+      throw new UnauthorizedException('User not found or disabled');
+    }
+
+    const valid = await this.verifyPassword(userRow.password_hash, dto.currentPassword);
+    if (!valid) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    const newHash = await this.hashPassword(dto.newPassword);
+
+    await this.db.withTenant(tenantId, async (client) => {
+      await client.query(
+        `UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2 AND tenant_id = $3`,
+        [newHash, userId, tenantId],
+      );
+    });
+
+    await this.audit.logTenant({
+      tenantId,
+      actorUserId: userId,
+      action: 'user.change_password',
+      entityType: 'user',
+      entityId: userId,
+      metadata: { timestamp: new Date().toISOString(), result: 'success' },
+    });
+
+    const freshTokens = await this.issueTokens({
+      sub: userId,
+      tenantId,
+      isSuperAdmin: false,
+      permissions: user.permissions ?? [],
+      mustChangePassword: false,
+    });
+
+    return {
+      success: true,
+      message: 'Password updated successfully',
+      ...freshTokens,
+    };
+  }
+
   private async issueTokens(payload: AccessTokenPayload) {
     const accessToken = this.jwt.sign(payload, {
       secret: this.config.get('JWT_ACCESS_SECRET'),
       expiresIn: this.config.get('JWT_ACCESS_TTL') ?? '15m',
     });
     const refreshToken = this.jwt.sign(
-      { sub: payload.sub, tenantId: payload.tenantId },
+      { sub: payload.sub, tenantId: payload.tenantId, mustChangePassword: payload.mustChangePassword },
       {
         secret: this.config.get('JWT_REFRESH_SECRET'),
         expiresIn: this.config.get('JWT_REFRESH_TTL') ?? '7d',
@@ -209,7 +284,10 @@ export class AuthService {
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(config: ConfigService) {
+  constructor(
+    config: ConfigService,
+    private readonly db: DatabaseService,
+  ) {
     super({
       jwtFromRequest: ExtractJwt.fromExtractors([
         ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -224,6 +302,25 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // Whatever is returned here becomes req.user — this is the ONLY
     // source of tenantId/permissions for downstream guards. It comes
     // from the verified, signed token, never from request body/query.
+
+    // Platform Super Admin tokens bypass tenant status check
+    if (payload.isSuperAdmin) {
+      return payload;
+    }
+
+    // Tenant-scoped tokens must verify that the tenant exists and is active.
+    // This guarantees that any existing JWTs stop working immediately after
+    // shop deactivation or deletion.
+    if (payload.tenantId) {
+      const tenantRow = await this.db.tenantPool.query(
+        `SELECT status FROM tenants WHERE id = $1`,
+        [payload.tenantId],
+      );
+      if (tenantRow.rowCount === 0 || tenantRow.rows[0].status !== 'active') {
+        throw new UnauthorizedException('Shop is inactive or does not exist');
+      }
+    }
+
     return payload;
   }
 }
@@ -247,6 +344,13 @@ export class AuthController {
   @HttpCode(200)
   async superAdminLogin(@Body() dto: SuperAdminLoginDto) {
     return this.authService.superAdminLogin(dto);
+  }
+
+  @Post('change-password')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  async changePassword(@Req() req: any, @Body() dto: ChangePasswordDto) {
+    return this.authService.changePassword(req.user, dto);
   }
 }
 

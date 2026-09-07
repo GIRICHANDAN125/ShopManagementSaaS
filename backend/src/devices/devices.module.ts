@@ -181,11 +181,14 @@ export class DevicesService {
     const expectedHash = hashCredential(dto.credential, pepper);
 
     const lookup = await this.db.tenantPool.query(
-      `SELECT tenant_id FROM device_tenant_lookup WHERE device_id = $1`,
+      `SELECT dtl.tenant_id, t.status
+       FROM device_tenant_lookup dtl
+       JOIN tenants t ON t.id = dtl.tenant_id
+       WHERE dtl.device_id = $1`,
       [dto.deviceId],
     );
-    if (lookup.rowCount === 0) {
-      throw new ForbiddenException('Invalid device credential');
+    if (lookup.rowCount === 0 || lookup.rows[0].status !== 'active') {
+      throw new ForbiddenException('Invalid device credential or inactive shop');
     }
     const tenantId = lookup.rows[0].tenant_id;
 

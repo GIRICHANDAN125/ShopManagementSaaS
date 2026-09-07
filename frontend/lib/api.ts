@@ -5,6 +5,19 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
 export interface AuthTokens {
   accessToken: string;
   refreshToken: string;
+  user?: {
+    id: string;
+    username: string;
+    displayName: string;
+    mustChangePassword?: boolean;
+  };
+}
+
+export interface ChangePasswordResponse {
+  success: boolean;
+  message: string;
+  accessToken: string;
+  refreshToken: string;
 }
 
 const TOKEN_KEY = 'shopapp_access_token';
@@ -27,6 +40,7 @@ export interface TokenPayload {
   tenantId: string | null;
   isSuperAdmin: boolean;
   permissions: string[];
+  mustChangePassword?: boolean;
 }
 
 export class ApiError extends Error {
@@ -243,4 +257,13 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(limits),
     }),
+  deleteTenant: (tenantId: string) =>
+    request(`/super-admin/tenants/${tenantId}`, {
+      method: 'DELETE',
+    }),
+  changePassword: (currentPassword: string, newPassword: string): Promise<ChangePasswordResponse> =>
+    request('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }) as Promise<ChangePasswordResponse>,
 };

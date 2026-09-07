@@ -71,6 +71,114 @@ export default function CounterPage() {
     code: 'CTR-01',
   });
   const [operatorName, setOperatorName] = useState<string>('Staff');
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      const isCurrentlyFullscreen = Boolean(
+        document.fullscreenElement ||
+          (document as unknown as { webkitFullscreenElement?: Element }).webkitFullscreenElement ||
+          (document as unknown as { mozFullScreenElement?: Element }).mozFullScreenElement ||
+          (document as unknown as { msFullscreenElement?: Element }).msFullscreenElement,
+      );
+      setIsFullscreen(isCurrentlyFullscreen);
+    }
+
+    function handleFullscreenError() {
+      setError('An error occurred while attempting to toggle full screen.');
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+
+    document.addEventListener('fullscreenerror', handleFullscreenError);
+    document.addEventListener('webkitfullscreenerror', handleFullscreenError);
+    document.addEventListener('mozfullscreenerror', handleFullscreenError);
+    document.addEventListener('MSFullscreenError', handleFullscreenError);
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+
+      document.removeEventListener('fullscreenerror', handleFullscreenError);
+      document.removeEventListener('webkitfullscreenerror', handleFullscreenError);
+      document.removeEventListener('mozfullscreenerror', handleFullscreenError);
+      document.removeEventListener('MSFullscreenError', handleFullscreenError);
+    };
+  }, []);
+
+  async function toggleFullscreen() {
+    try {
+      const doc = document as unknown as {
+        fullscreenElement?: Element;
+        webkitFullscreenElement?: Element;
+        mozFullScreenElement?: Element;
+        msFullscreenElement?: Element;
+        exitFullscreen?: () => Promise<void>;
+        webkitExitFullscreen?: () => Promise<void>;
+        mozCancelFullScreen?: () => Promise<void>;
+        msExitFullscreen?: () => Promise<void>;
+        fullscreenEnabled?: boolean;
+        webkitFullscreenEnabled?: boolean;
+        mozFullScreenEnabled?: boolean;
+        msFullscreenEnabled?: boolean;
+      };
+
+      const isFsEnabled =
+        doc.fullscreenEnabled ??
+        doc.webkitFullscreenEnabled ??
+        doc.mozFullScreenEnabled ??
+        doc.msFullscreenEnabled ??
+        true;
+
+      if (!isFsEnabled) {
+        setError('Full screen mode is disabled or not supported by your browser.');
+        return;
+      }
+
+      const activeFsEl =
+        doc.fullscreenElement ||
+        doc.webkitFullscreenElement ||
+        doc.mozFullScreenElement ||
+        doc.msFullscreenElement;
+
+      if (activeFsEl) {
+        if (document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else if (doc.webkitExitFullscreen) {
+          await doc.webkitExitFullscreen();
+        } else if (doc.mozCancelFullScreen) {
+          await doc.mozCancelFullScreen();
+        } else if (doc.msExitFullscreen) {
+          await doc.msExitFullscreen();
+        }
+      } else {
+        const elem = document.documentElement as HTMLElement & {
+          webkitRequestFullscreen?: () => Promise<void>;
+          mozRequestFullScreen?: () => Promise<void>;
+          msRequestFullscreen?: () => Promise<void>;
+        };
+        if (elem.requestFullscreen) {
+          await elem.requestFullscreen();
+        } else if (elem.webkitRequestFullscreen) {
+          await elem.webkitRequestFullscreen();
+        } else if (elem.mozRequestFullScreen) {
+          await elem.mozRequestFullScreen();
+        } else if (elem.msRequestFullscreen) {
+          await elem.msRequestFullscreen();
+        } else {
+          setError('Full screen mode is not supported by your browser.');
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(`Full screen request failed: ${msg}`);
+    }
+  }
 
   const refreshQueueStatus = useCallback(() => {
     setQueueCount(getQueue().filter((o) => o.syncState !== 'SYNCED').length);
@@ -296,6 +404,31 @@ export default function CounterPage() {
               {remainingOffline} offline number(s) remaining
             </Badge>
           )}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <SecondaryButton
+            type="button"
+            onClick={toggleFullscreen}
+            className="!py-1.5 !px-3 text-xs flex items-center gap-1.5 border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors shadow-xs"
+            title={isFullscreen ? 'Exit Full Screen' : 'Enter Full Screen'}
+          >
+            {isFullscreen ? (
+              <>
+                <svg className="w-3.5 h-3.5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 9L4 4m0 0h5m-5 0v5m6 6l5 5m0 0h-5m5 0v-5M9 15l-5 5m0 0h5m-5 0v-5m11-6l5-5m0 0h-5m5 0v5" />
+                </svg>
+                Exit Full Screen
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5h-4m4 0v-4m0 4l-5-5" />
+                </svg>
+                Full Screen
+              </>
+            )}
+          </SecondaryButton>
         </div>
       </div>
 

@@ -34,10 +34,27 @@ export class PermissionsGuard implements CanActivate {
         'Endpoint has no declared permission requirement — denying by default',
       );
     }
-    if (required === 'public') return true;
 
     const req = context.switchToHttp().getRequest();
-    const user = req.user as { permissions?: string[]; isSuperAdmin?: boolean } | undefined;
+    const user = req.user as { permissions?: string[]; isSuperAdmin?: boolean; mustChangePassword?: boolean } | undefined;
+
+    // Forced first-login password change:
+    // Any user with mustChangePassword = true is blocked from all application endpoints
+    // except the password change endpoint (/auth/change-password).
+    if (user && !user.isSuperAdmin && user.mustChangePassword) {
+      const path = req.path || req.url || '';
+      if (!path.includes('/auth/change-password')) {
+        throw new ForbiddenException({
+          statusCode: 403,
+          error: 'Forbidden',
+          code: 'PASSWORD_CHANGE_REQUIRED',
+          message: 'Password change required before accessing the application',
+        });
+      }
+    }
+
+    if (required === 'public') return true;
+
     if (!user) throw new ForbiddenException('Not authenticated');
     if (user.isSuperAdmin) {
       // Super Admin's authority is enforced by the DB grant/RLS split

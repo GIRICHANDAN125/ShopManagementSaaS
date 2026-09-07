@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   Injectable,
   Logger,
@@ -13,7 +14,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { IsIn, IsInt, IsOptional, IsString, Min, MinLength } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min, MinLength, isUUID } from 'class-validator';
 import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
 import { DatabaseModule, DatabaseService } from '../database/database.module';
@@ -27,6 +28,7 @@ export class CreateTenantDto {
   @IsOptional() @IsString() adminUsername?: string;
   @IsOptional() @IsString() adminDisplayName?: string;
   @IsOptional() @IsString() @MinLength(6) adminPassword?: string;
+  @IsOptional() @IsBoolean() mustChangePassword?: boolean;
   @IsOptional() @IsInt() @Min(1) maxEmployees?: number;
   @IsOptional() @IsInt() @Min(1) maxCounters?: number;
   @IsOptional() @IsInt() @Min(1) maxCustomerDisplays?: number;
@@ -91,8 +93,10 @@ export class SuperAdminService {
 
     const adminUsername = (dto.adminUsername?.trim() || 'admin').toLowerCase();
     const adminDisplayName = dto.adminDisplayName?.trim() || `${dto.displayName} Admin`;
+    const isTemporary = !dto.adminPassword;
     const plainPassword = dto.adminPassword || crypto.randomBytes(6).toString('hex'); // 12 characters
     const passwordHash = await argon2.hash(plainPassword, { type: argon2.argon2id });
+    const mustChangePassword = dto.mustChangePassword !== undefined ? dto.mustChangePassword : isTemporary;
 
     // Step 1: Insert tenant into root registry (superAdmin pool)
     const tenant = await this.db.withSuperAdmin(async (client) => {
@@ -154,10 +158,10 @@ export class SuperAdminService {
 
         // Insert initial Shop Admin (tenant_id strictly equals tenant.id, never NULL)
         const userRes = await client.query(
-          `INSERT INTO users (tenant_id, username, password_hash, display_name, status)
-           VALUES ($1, $2, $3, $4, 'active')
-           RETURNING id, username, display_name, status, tenant_id`,
-          [tenant.id, adminUsername, passwordHash, adminDisplayName],
+          `INSERT INTO users (tenant_id, username, password_hash, display_name, status, must_change_password)
+           VALUES ($1, $2, $3, $4, 'active', $5)
+           RETURNING id, username, display_name, status, tenant_id, must_change_password`,
+          [tenant.id, adminUsername, passwordHash, adminDisplayName, mustChangePassword],
         );
 
         const createdUser = userRes.rows[0];
@@ -236,23 +240,76 @@ export class SuperAdminService {
   }
 
   async setTenantStatus(actorUserId: string, dto: SetTenantStatusDto) {
+    if (!isUUID(dto.tenantId)) {
+      throw new BadRequestException('Invalid tenant UUID format');
+    }
     const tenant = await this.db.withSuperAdmin(async (client) => {
       const res = await client.query(
         `UPDATE tenants SET status = $1, updated_at = now() WHERE id = $2
-         RETURNING id, code, status`,
+         RETURNING id, code, display_name, status`,
         [dto.status, dto.tenantId],
       );
       return res.rows[0];
     });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${dto.tenantId} not found`);
+    }
 
     await this.audit.logSuperAdmin({
       actorUserId,
       action: `tenant.${dto.status === 'active' ? 'activate' : 'deactivate'}`,
       entityType: 'tenant',
       entityId: dto.tenantId,
+      metadata: { code: tenant.code, displayName: tenant.display_name, status: dto.status },
     });
 
     return tenant;
+  }
+
+  async deleteTenant(actorUserId: string, tenantId: string) {
+    if (!isUUID(tenantId)) {
+      throw new BadRequestException('Invalid tenant UUID format');
+    }
+
+    // 1. Verify target tenant exists by exact UUID before attempting deletion
+    const tenant = await this.db.withSuperAdmin(async (client) => {
+      const res = await client.query(
+        `SELECT id, code, display_name FROM tenants WHERE id = $1`,
+        [tenantId],
+      );
+      return res.rows[0];
+    });
+
+    if (!tenant) {
+      throw new NotFoundException(`Tenant ${tenantId} not found`);
+    }
+
+    // 2. Perform atomic cascading deletion strictly for target tenant UUID
+    await this.db.withSuperAdmin(async (client) => {
+      await client.query(`SELECT delete_tenant_cascade($1)`, [tenantId]);
+    });
+
+    // 3. Platform audit log (tenant_id IS NULL) so it permanently survives tenant deletion
+    await this.audit.logSuperAdmin({
+      actorUserId,
+      action: 'tenant.delete',
+      entityType: 'tenant',
+      entityId: tenant.id,
+      metadata: {
+        targetTenantId: tenant.id,
+        code: tenant.code,
+        displayName: tenant.display_name,
+        timestamp: new Date().toISOString(),
+        result: 'success',
+      },
+    });
+
+    return {
+      success: true,
+      message: `Shop ${tenant.display_name} (${tenant.code}) has been permanently deleted.`,
+      id: tenant.id,
+    };
   }
 
   async updateTenantLimits(actorUserId: string, tenantId: string, dto: UpdateLimitsDto) {
@@ -374,6 +431,11 @@ export class SuperAdminController {
   @Put(':id/limits')
   async updateLimits(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateLimitsDto) {
     return this.superAdmin.updateTenantLimits(req.user.sub, id, dto);
+  }
+
+  @Delete(':id')
+  async delete(@Req() req: any, @Param('id') id: string) {
+    return this.superAdmin.deleteTenant(req.user.sub, id);
   }
 }
 
