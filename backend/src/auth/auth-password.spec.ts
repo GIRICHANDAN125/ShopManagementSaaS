@@ -240,4 +240,75 @@ describe('AuthService Password Security & Error Handling', () => {
       expect(verifyNew).toBe(true);
     });
   });
+
+  describe('Super Admin Login & Credential Changes', () => {
+    it('authenticates Super Admin case-insensitively using Argon2id verified credentials', async () => {
+      const plainPassword = 'UpdatedSuperAdminPass2026!';
+      const hash = await argon2.hash(plainPassword, { type: argon2.argon2id });
+
+      const queryMock = jest.fn().mockResolvedValueOnce({
+        rows: [{ id: 'sa-uuid-1', password_hash: hash, status: 'active' }],
+      });
+
+      mockDb.withSuperAdmin.mockImplementationOnce(async (fn: any) => {
+        return fn({ query: queryMock });
+      });
+
+      const result = await authService.superAdminLogin({
+        username: 'New_Platform_Admin',
+        password: plainPassword,
+      });
+
+      expect(result).toBeDefined();
+      expect(result.accessToken).toBe('mock_token');
+      expect(queryMock).toHaveBeenCalledWith(
+        expect.stringContaining('LOWER(username) = LOWER($1)'),
+        ['New_Platform_Admin'],
+      );
+      expect(mockAudit.logSuperAdmin).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actorUserId: 'sa-uuid-1',
+          action: 'auth.super_admin_login',
+        }),
+      );
+    });
+
+    it('rejects Super Admin login with incorrect password', async () => {
+      const hash = await argon2.hash('CorrectPass123!', { type: argon2.argon2id });
+
+      mockDb.withSuperAdmin.mockImplementationOnce(async (fn: any) => {
+        return fn({
+          query: jest.fn().mockResolvedValueOnce({
+            rows: [{ id: 'sa-uuid-1', password_hash: hash, status: 'active' }],
+          }),
+        });
+      });
+
+      await expect(
+        authService.superAdminLogin({
+          username: 'superadmin',
+          password: 'WrongPassword!',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects Super Admin login if user is inactive', async () => {
+      const hash = await argon2.hash('Pass123!', { type: argon2.argon2id });
+
+      mockDb.withSuperAdmin.mockImplementationOnce(async (fn: any) => {
+        return fn({
+          query: jest.fn().mockResolvedValueOnce({
+            rows: [{ id: 'sa-uuid-1', password_hash: hash, status: 'disabled' }],
+          }),
+        });
+      });
+
+      await expect(
+        authService.superAdminLogin({
+          username: 'superadmin',
+          password: 'Pass123!',
+        }),
+      ).rejects.toThrow(UnauthorizedException);
+    });
+  });
 });

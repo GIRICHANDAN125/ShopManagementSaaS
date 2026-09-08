@@ -61,6 +61,44 @@ export default function SuperAdminPage() {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Tab navigation
+  const [activeTab, setActiveTab] = useState<'tenants' | 'security'>('tenants');
+
+  // Super Admin Profile & Account Settings
+  const [adminProfile, setAdminProfile] = useState<{
+    id: string;
+    username: string;
+    display_name: string | null;
+    status: string;
+    created_at: string;
+  } | null>(null);
+
+  // Username form state
+  const [newUsername, setNewUsername] = useState('');
+  const [usernameLoading, setUsernameLoading] = useState(false);
+  const [usernameSuccess, setUsernameSuccess] = useState<string | null>(null);
+  const [usernameError, setUsernameError] = useState<string | null>(null);
+
+  // Password form state
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  const [showPasswordFields, setShowPasswordFields] = useState(false);
+
+  const loadProfile = useCallback(async () => {
+    try {
+      const p = await api.getSuperAdminProfile();
+      setAdminProfile(p);
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        router.push('/super-admin/login');
+      }
+    }
+  }, [router]);
+
   const refresh = useCallback(async () => {
     try {
       setTenants(await api.listTenants());
@@ -83,7 +121,9 @@ export default function SuperAdminPage() {
       return;
     }
     refresh();
-  }, [refresh, router]);
+    loadProfile();
+  }, [refresh, loadProfile, router]);
+
 
   async function createTenant(e: React.FormEvent) {
     e.preventDefault();
@@ -210,36 +250,165 @@ export default function SuperAdminPage() {
     setTimeout(() => setCopied(false), 2500);
   }
 
+  async function handleUpdateUsername(e: React.FormEvent) {
+    e.preventDefault();
+    setUsernameError(null);
+    setUsernameSuccess(null);
+
+    const trimmed = newUsername.trim();
+    if (!trimmed) {
+      setUsernameError('Please enter a new username');
+      return;
+    }
+    if (trimmed.length < 3 || trimmed.length > 50) {
+      setUsernameError('Username must be between 3 and 50 characters');
+      return;
+    }
+    if (!/^[a-zA-Z0-9._-]+$/.test(trimmed)) {
+      setUsernameError('Username may only contain letters, digits, dots, underscores, and hyphens');
+      return;
+    }
+    if (adminProfile && trimmed.toLowerCase() === adminProfile.username.toLowerCase()) {
+      setUsernameError('New username is the same as your current username');
+      return;
+    }
+
+    setUsernameLoading(true);
+    try {
+      const current = adminProfile?.username || 'superadmin';
+      const res = await api.updateSuperAdminUsername(current, trimmed);
+      setUsernameSuccess(res.message || `Username updated to "${trimmed}" successfully`);
+      setNewUsername('');
+      await loadProfile();
+      setTimeout(() => setUsernameSuccess(null), 5000);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setUsernameError(message);
+    } finally {
+      setUsernameLoading(false);
+    }
+  }
+
+  async function handleChangePassword(e: React.FormEvent) {
+    e.preventDefault();
+    setPasswordError(null);
+    setPasswordSuccess(null);
+
+    if (!currentPassword) {
+      setPasswordError('Please enter your current password');
+      return;
+    }
+    if (!newPassword) {
+      setPasswordError('Please enter a new password');
+      return;
+    }
+    if (newPassword.length < 8) {
+      setPasswordError('New password must be at least 8 characters');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New password and confirmation do not match');
+      return;
+    }
+    if (newPassword === currentPassword) {
+      setPasswordError('New password must be different from your current password');
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      const res = await api.changeSuperAdminPassword(currentPassword, newPassword, confirmPassword);
+      setPasswordSuccess(
+        res.message || 'Password updated successfully. Please use your new password on your next login.',
+      );
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      setTimeout(() => setPasswordSuccess(null), 6000);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setPasswordError(message);
+    } finally {
+      setPasswordLoading(false);
+    }
+  }
+
   function logout() {
     clearToken();
     router.push('/super-admin/login');
   }
 
+
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="max-w-4xl mx-auto">
-        <header className="flex items-center justify-between mb-8">
+        <header className="flex items-center justify-between mb-6">
           <div>
-            <span className="text-xs font-semibold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
-              Platform Super Admin
-            </span>
-            <h1 className="text-2xl font-bold text-slate-900 mt-1">Tenant & Shop Management</h1>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold uppercase tracking-wider text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-full">
+                Platform Super Admin
+              </span>
+              {adminProfile && (
+                <span className="text-xs font-mono font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-200">
+                  @{adminProfile.username}
+                </span>
+              )}
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 mt-2">
+              {activeTab === 'tenants' ? 'Tenant & Shop Management' : 'Super Admin Account & Security'}
+            </h1>
             <p className="text-sm text-slate-500">
-              Provision isolated shops, configure resource limits, and manage initial credentials.
+              {activeTab === 'tenants'
+                ? 'Provision isolated shops, configure resource limits, and manage initial credentials.'
+                : 'Manage Super Admin credentials, change username, and update password.'}
             </p>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => router.push('/login')}
-              className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3 py-1.5 rounded-lg"
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 px-3 py-1.5 rounded-lg transition-colors"
             >
               Shop Login →
             </button>
-            <button onClick={logout} className="text-sm text-slate-500 hover:text-slate-800">
+            <button onClick={logout} className="text-sm text-slate-500 hover:text-slate-800 transition-colors">
               Sign out
             </button>
           </div>
         </header>
+
+        {/* Tab Navigation */}
+        <div className="flex items-center gap-2 border-b border-slate-200 mb-8 pb-px">
+          <button
+            type="button"
+            onClick={() => setActiveTab('tenants')}
+            className={`pb-3 px-3 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'tenants'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'
+            }`}
+          >
+            <span>Shops & Tenants</span>
+            <span
+              className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                activeTab === 'tenants' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-600'
+              }`}
+            >
+              {tenants.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('security')}
+            className={`pb-3 px-3 text-sm font-semibold border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === 'security'
+                ? 'border-indigo-600 text-indigo-600'
+                : 'border-transparent text-slate-500 hover:text-slate-800 hover:border-slate-300'
+            }`}
+          >
+            <span>Account & Security</span>
+            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
+          </button>
+        </div>
 
         {/* Success Alert Banner */}
         {successMessage && (
@@ -257,8 +426,10 @@ export default function SuperAdminPage() {
           </div>
         )}
 
-        {/* Credentials Modal / Banner */}
-        {createdCredentials && (
+        {activeTab === 'tenants' && (
+          <>
+            {/* Credentials Modal / Banner */}
+            {createdCredentials && (
           <div className="bg-emerald-50 border-2 border-emerald-300 rounded-2xl p-6 mb-8 shadow-sm">
             <div className="flex items-start justify-between">
               <div>
@@ -570,6 +741,239 @@ export default function SuperAdminPage() {
             )}
           </div>
         </div>
+          </>
+        )}
+
+        {activeTab === 'security' && (
+          <div className="space-y-8 animate-fade-in">
+            {/* Account Overview Card */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex items-center justify-between pb-5 border-b border-slate-100">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Account Overview</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Platform Super Admin credentials and access control information.
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold px-3 py-1 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  Active Super Admin
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-5">
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Current Username
+                  </span>
+                  <span className="text-sm font-mono font-bold text-slate-900 mt-1 block">
+                    {adminProfile?.username ?? 'Loading…'}
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Platform Role
+                  </span>
+                  <span className="text-sm font-semibold text-indigo-600 mt-1 block">
+                    Super Administrator
+                  </span>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5">
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Security Level
+                  </span>
+                  <span className="text-sm font-semibold text-slate-800 mt-1 block">
+                    Global Tenant Authority
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Change Username Card */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex items-start justify-between pb-5 border-b border-slate-100">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Change Username</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Change your login username. Allowed characters: letters, numbers, dots, hyphens, and underscores (3–50 chars).
+                  </p>
+                </div>
+              </div>
+
+              {usernameSuccess && (
+                <div className="mt-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+                  <span className="font-bold text-emerald-600">✓</span>
+                  <span>{usernameSuccess}</span>
+                </div>
+              )}
+
+              {usernameError && (
+                <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                  <span className="font-bold text-rose-600">⚠</span>
+                  <span>{usernameError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleUpdateUsername} className="space-y-4 pt-5">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Current Username
+                    </label>
+                    <input
+                      type="text"
+                      disabled
+                      value={adminProfile?.username ?? ''}
+                      className="w-full rounded-xl border border-slate-200 px-3.5 py-2.5 text-sm bg-slate-100 text-slate-600 font-mono cursor-not-allowed"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      New Username *
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newUsername}
+                      onChange={(e) => setNewUsername(e.target.value)}
+                      placeholder="e.g. platform_admin"
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                    <span className="text-[11px] text-slate-400 mt-1 block">
+                      Must be 3–50 characters (letters, numbers, ., -, _)
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={usernameLoading || !newUsername.trim() || !adminProfile}
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-xs"
+                  >
+                    {usernameLoading ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                        Updating Username…
+                      </>
+                    ) : (
+                      'Update Username'
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Change Password Card */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
+              <div className="flex items-start justify-between pb-5 border-b border-slate-100">
+                <div>
+                  <h2 className="text-base font-semibold text-slate-900">Change Password</h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Update your Super Admin password. Use a strong password with at least 8 characters.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPasswordFields((prev) => !prev)}
+                  className="text-xs font-medium text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-lg transition-colors"
+                >
+                  {showPasswordFields ? 'Hide Passwords' : 'Show Passwords'}
+                </button>
+              </div>
+
+              {passwordSuccess && (
+                <div className="mt-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2">
+                  <span className="font-bold text-emerald-600">✓</span>
+                  <span>{passwordSuccess}</span>
+                </div>
+              )}
+
+              {passwordError && (
+                <div className="mt-4 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                  <span className="font-bold text-rose-600">⚠</span>
+                  <span>{passwordError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleChangePassword} className="space-y-4 pt-5">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Current Password *
+                  </label>
+                  <input
+                    type={showPasswordFields ? 'text' : 'password'}
+                    required
+                    value={currentPassword}
+                    onChange={(e) => setCurrentPassword(e.target.value)}
+                    placeholder="Enter your current Super Admin password"
+                    className="w-full sm:w-2/3 rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      New Password *
+                    </label>
+                    <input
+                      type={showPasswordFields ? 'text' : 'password'}
+                      required
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Minimum 8 characters"
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Confirm New Password *
+                    </label>
+                    <input
+                      type={showPasswordFields ? 'text' : 'password'}
+                      required
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      placeholder="Re-enter new password"
+                      className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 bg-white"
+                    />
+                  </div>
+                </div>
+
+                <div className="bg-slate-50 border border-slate-200/80 rounded-xl p-3.5 text-xs text-slate-600 space-y-1">
+                  <p className="font-semibold text-slate-700">Password requirements:</p>
+                  <ul className="list-disc pl-5 space-y-0.5 text-slate-500 text-[11px]">
+                    <li>Minimum 8 characters in length</li>
+                    <li>Must be different from current password</li>
+                    <li>Must match password confirmation</li>
+                  </ul>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    disabled={passwordLoading || !currentPassword || !newPassword || !confirmPassword}
+                    className="bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white px-5 py-2.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-2 shadow-xs"
+                  >
+                    {passwordLoading ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin"></span>
+                        Updating Password…
+                      </>
+                    ) : (
+                      'Update Password'
+                    )}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
 
         {/* Edit Limits Modal */}
         {editingTenant && (

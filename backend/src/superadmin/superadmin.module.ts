@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -12,9 +13,10 @@ import {
   Post,
   Put,
   Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
-import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min, MinLength, isUUID } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, MinLength, isUUID } from 'class-validator';
 import * as crypto from 'crypto';
 import * as argon2 from 'argon2';
 import { DatabaseModule, DatabaseService } from '../database/database.module';
@@ -439,10 +441,243 @@ export class SuperAdminController {
   }
 }
 
+// ---- Account Management DTOs ----------------------------------------------
+
+export class UpdateSuperAdminUsernameDto {
+  /**
+   * The caller must supply their current username so we can
+   * confirm they are the active Super Admin before renaming.
+   */
+  @IsString() @MinLength(1) currentUsername: string;
+
+  /**
+   * 3–50 characters, alphanumeric plus dots/underscores/hyphens only.
+   * This mirrors the pattern used for tenant employees so the
+   * login form never needs special-case handling.
+   */
+  @IsString()
+  @MinLength(3)
+  @MaxLength(50)
+  @Matches(/^[a-zA-Z0-9._-]+$/, {
+    message: 'Username may only contain letters, digits, dots, underscores, and hyphens',
+  })
+  newUsername: string;
+}
+
+export class ChangeSuperAdminPasswordDto {
+  @IsString() @MinLength(1) currentPassword: string;
+  @IsString() @MinLength(8) newPassword: string;
+  @IsString() @MinLength(1) confirmPassword: string;
+}
+
+// ---- SuperAdminAccountService ----------------------------------------------
+
+@Injectable()
+export class SuperAdminAccountService {
+  private readonly logger = new Logger(SuperAdminAccountService.name);
+
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly audit: AuditService,
+  ) {}
+
+  /** Returns the authenticated Super Admin's profile (no sensitive fields). */
+  async getProfile(actorUserId: string) {
+    const user = await this.db.withSuperAdmin(async (client) => {
+      const res = await client.query(
+        `SELECT id, username, display_name, status, created_at
+         FROM users
+         WHERE id = $1 AND tenant_id IS NULL`,
+        [actorUserId],
+      );
+      return res.rows[0] ?? null;
+    });
+    if (!user || user.status !== 'active') {
+      throw new UnauthorizedException('Super Admin account not found or inactive');
+    }
+    return user;
+  }
+
+  /**
+   * Changes the Super Admin's username.
+   *
+   * Security properties:
+   *   - Only the currently authenticated Super Admin can rename themselves
+   *     (actorUserId comes from the verified JWT, not the request body).
+   *   - currentUsername must match the stored username as an extra guard.
+   *   - New username is checked for uniqueness among ALL Super Admin rows
+   *     (tenant_id IS NULL) via an explicit SELECT before the UPDATE because
+   *     the standard UNIQUE(tenant_id, username) constraint treats NULL values
+   *     as distinct, so it would not catch duplicates among Super Admin users.
+   *   - Username format is validated by the DTO (alphanumeric / dots / etc).
+   *   - Old username is invalidated for login immediately on UPDATE.
+   */
+  async updateUsername(actorUserId: string, dto: UpdateSuperAdminUsernameDto) {
+    const trimmedNew = dto.newUsername.trim().toLowerCase();
+
+    // 1. Verify the actor exists and current username matches
+    const existing = await this.db.withSuperAdmin(async (client) => {
+      const res = await client.query(
+        `SELECT id, username, status FROM users WHERE id = $1 AND tenant_id IS NULL`,
+        [actorUserId],
+      );
+      return res.rows[0] ?? null;
+    });
+
+    if (!existing || existing.status !== 'active') {
+      throw new UnauthorizedException('Super Admin account not found or inactive');
+    }
+
+    if (existing.username.toLowerCase() !== dto.currentUsername.trim().toLowerCase()) {
+      throw new BadRequestException('Current username does not match');
+    }
+
+    // 2. No-op if the new username is the same as the current one
+    if (existing.username.toLowerCase() === trimmedNew) {
+      return { success: true, message: 'Username unchanged' };
+    }
+
+    // 3. Check uniqueness across all Super Admin accounts (tenant_id IS NULL)
+    const duplicate = await this.db.withSuperAdmin(async (client) => {
+      const res = await client.query(
+        `SELECT id FROM users WHERE tenant_id IS NULL AND LOWER(username) = $1 AND id != $2`,
+        [trimmedNew, actorUserId],
+      );
+      return res.rows[0] ?? null;
+    });
+
+    if (duplicate) {
+      throw new ConflictException(`Username "${dto.newUsername}" is already taken`);
+    }
+
+    // 4. Perform the update
+    await this.db.withSuperAdmin(async (client) => {
+      await client.query(
+        `UPDATE users SET username = $1 WHERE id = $2 AND tenant_id IS NULL`,
+        [trimmedNew, actorUserId],
+      );
+    });
+
+    // 5. Audit log — no passwords, no hashes
+    await this.audit.logSuperAdmin({
+      actorUserId,
+      action: 'superadmin.change_username',
+      entityType: 'user',
+      entityId: actorUserId,
+      metadata: { oldUsername: existing.username, newUsername: trimmedNew },
+    });
+
+    this.logger.log(`Super Admin ${actorUserId} changed username from "${existing.username}" to "${trimmedNew}"`);
+
+    return { success: true, message: 'Username updated successfully' };
+  }
+
+  /**
+   * Changes the Super Admin's password.
+   *
+   * Follows the same security pattern as AuthService.changePassword for
+   * tenant users (ARCHITECTURE.md §4, SECURITY.md §16):
+   *   - Verifies current password with the existing safe verifier.
+   *   - Hashes with Argon2id.
+   *   - Never returns or logs passwords / hashes.
+   *   - Uses the dedicated superAdminPool so RLS is not bypassed.
+   */
+  async changePassword(actorUserId: string, dto: ChangeSuperAdminPasswordDto) {
+    // 1. Client-side-checkable validations (returned as 400 to avoid enumeration)
+    if (dto.newPassword !== dto.confirmPassword) {
+      throw new BadRequestException('New password and confirmation do not match');
+    }
+    if (dto.currentPassword === dto.newPassword) {
+      throw new BadRequestException('New password must be different from the current password');
+    }
+
+    // 2. Fetch current hash — never return it to the caller
+    const user = await this.db.withSuperAdmin(async (client) => {
+      const res = await client.query(
+        `SELECT id, password_hash, status FROM users WHERE id = $1 AND tenant_id IS NULL`,
+        [actorUserId],
+      );
+      return res.rows[0] ?? null;
+    });
+
+    if (!user || user.status !== 'active') {
+      throw new UnauthorizedException('Super Admin account not found or inactive');
+    }
+
+    // 3. Verify current password with safe handler (malformed hashes → false, not 500)
+    let valid = false;
+    try {
+      const hash: string = user.password_hash;
+      if (hash && typeof hash === 'string' && hash.startsWith('$')) {
+        valid = await argon2.verify(hash, dto.currentPassword);
+      } else {
+        this.logger.warn(`Super Admin ${actorUserId}: stored password hash is malformed`);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Super Admin ${actorUserId}: password verification failed safely: ${(err as Error)?.message}`,
+      );
+    }
+    if (!valid) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+
+    // 4. Hash new password with Argon2id
+    const newHash = await argon2.hash(dto.newPassword, { type: argon2.argon2id });
+
+    // 5. Persist the new hash
+    await this.db.withSuperAdmin(async (client) => {
+      await client.query(
+        `UPDATE users SET password_hash = $1, must_change_password = false WHERE id = $2 AND tenant_id IS NULL`,
+        [newHash, actorUserId],
+      );
+    });
+
+    // 6. Audit log — no passwords, no hashes in metadata
+    await this.audit.logSuperAdmin({
+      actorUserId,
+      action: 'superadmin.change_password',
+      entityType: 'user',
+      entityId: actorUserId,
+      metadata: { timestamp: new Date().toISOString(), result: 'success' },
+    });
+
+    this.logger.log(`Super Admin ${actorUserId} changed their password`);
+
+    return { success: true, message: 'Password updated successfully. Please use the new password on your next login.' };
+  }
+}
+
+// ---- SuperAdminAccountController -------------------------------------------
+
+@Controller('super-admin/account')
+@UseGuards(JwtAuthGuard, SuperAdminOnlyGuard)
+export class SuperAdminAccountController {
+  constructor(private readonly account: SuperAdminAccountService) {}
+
+  /** GET /super-admin/account/me — returns the authenticated Super Admin's profile */
+  @Get('me')
+  async getProfile(@Req() req: any) {
+    return this.account.getProfile(req.user.sub);
+  }
+
+  /** PUT /super-admin/account/username — change the Super Admin's username */
+  @Put('username')
+  async updateUsername(@Req() req: any, @Body() dto: UpdateSuperAdminUsernameDto) {
+    return this.account.updateUsername(req.user.sub, dto);
+  }
+
+  /** PUT /super-admin/account/password — change the Super Admin's password */
+  @Put('password')
+  async changePassword(@Req() req: any, @Body() dto: ChangeSuperAdminPasswordDto) {
+    return this.account.changePassword(req.user.sub, dto);
+  }
+}
+
 @Module({
   imports: [DatabaseModule, AuditModule],
-  controllers: [SuperAdminController],
-  providers: [SuperAdminService],
-  exports: [SuperAdminService],
+  controllers: [SuperAdminController, SuperAdminAccountController],
+  providers: [SuperAdminService, SuperAdminAccountService],
+  exports: [SuperAdminService, SuperAdminAccountService],
 })
 export class SuperAdminModule {}

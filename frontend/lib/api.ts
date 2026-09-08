@@ -266,4 +266,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ currentPassword, newPassword }),
     }) as Promise<ChangePasswordResponse>,
+  getSuperAdminProfile: (): Promise<{ id: string; username: string; display_name: string | null; status: string; created_at: string }> =>
+    request('/super-admin/account/me'),
+  updateSuperAdminUsername: (
+    currentUsername: string,
+    newUsername: string,
+  ): Promise<{ success: boolean; message: string }> =>
+    request('/super-admin/account/username', {
+      method: 'PUT',
+      body: JSON.stringify({ currentUsername, newUsername }),
+    }),
+  changeSuperAdminPassword: (
+    currentPassword: string,
+    newPassword: string,
+    confirmPassword: string,
+  ): Promise<{ success: boolean; message: string }> =>
+    request('/super-admin/account/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword, confirmPassword }),
+    }),
 };
+

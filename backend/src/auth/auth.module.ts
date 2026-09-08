@@ -169,7 +169,7 @@ export class AuthService {
   async superAdminLogin(dto: SuperAdminLoginDto) {
     const user = await this.db.withSuperAdmin(async (client) => {
       const res = await client.query(
-        `SELECT id, password_hash, status FROM users WHERE tenant_id IS NULL AND username = $1`,
+        `SELECT id, password_hash, status FROM users WHERE tenant_id IS NULL AND LOWER(username) = LOWER($1)`,
         [dto.username],
       );
       return res.rows[0] ?? null;
