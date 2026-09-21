@@ -81,7 +81,7 @@ export class OrdersService {
     userId: string,
     dto: CreateOrderDto,
   ) {
-    return this.db.withTenant(tenantId, async (client) => {
+    const result = await this.db.withTenant(tenantId, async (client) => {
       // 1. Idempotency check first.
       const existing = await client.query(
         `SELECT o.id, o.order_number, o.display_number, o.total, o.status,
@@ -204,6 +204,17 @@ export class OrdersService {
 
       return this.toResponse(order);
     });
+
+    if (!(result as any)._idempotentReturn) {
+      this.realtime.emitOrderStatusChanged(tenantId, {
+        orderId: result.id,
+        orderNumber: result.orderNumber,
+        displayNumber: result.displayNumber,
+        status: result.status,
+      });
+    }
+
+    return result;
   }
 
   async cancelOrder(tenantId: string, userId: string, orderId: string) {
@@ -259,7 +270,25 @@ export class OrdersService {
     return this.db.withTenant(tenantId, async (client) => {
       const res = await client.query(
         `SELECT o.id, o.order_number, o.display_number, o.status, o.order_type,
-                o.total, o.created_at, u.display_name AS served_by
+                o.total, o.created_at, u.display_name AS served_by,
+                COALESCE(
+                  (
+                    SELECT jsonb_agg(
+                      jsonb_build_object(
+                        'id', oi.id,
+                        'productId', oi.product_id,
+                        'name', p.name,
+                        'quantity', oi.quantity,
+                        'unitPrice', oi.unit_price,
+                        'lineTotal', oi.line_total
+                      )
+                    )
+                    FROM order_items oi
+                    JOIN products p ON p.id = oi.product_id
+                    WHERE oi.order_id = o.id
+                  ),
+                  '[]'::jsonb
+                ) AS items
          FROM orders o JOIN users u ON u.id = o.created_by_user_id
          WHERE o.tenant_id = $1 AND o.status NOT IN ('COLLECTED','CANCELLED')
          ORDER BY o.created_at ASC`,
@@ -365,7 +394,7 @@ export class OrdersService {
    *    reprint after reconnect, ever).
    */
   async syncOfflineOrder(tenantId: string, userId: string, dto: SyncOfflineOrderDto) {
-    return this.db.withTenant(tenantId, async (client) => {
+    const result = await this.db.withTenant(tenantId, async (client) => {
       const existing = await client.query(
         `SELECT o.id, o.order_number, o.display_number, o.total, o.status,
                 (SELECT jsonb_agg(jsonb_build_object('productId', oi.product_id, 'quantity', oi.quantity))
@@ -445,6 +474,17 @@ export class OrdersService {
 
       return { ...this.toResponse(order), _idempotentReturn: false };
     });
+
+    if (!(result as any)._idempotentReturn) {
+      this.realtime.emitOrderStatusChanged(tenantId, {
+        orderId: result.id,
+        orderNumber: result.orderNumber,
+        displayNumber: result.displayNumber,
+        status: result.status,
+      });
+    }
+
+    return result;
   }
 
   private toResponse(row: any) {

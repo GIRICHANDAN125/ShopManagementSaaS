@@ -1,9 +1,8 @@
 'use client';
 import { useEffect, useState } from 'react';
 import io, { Socket } from 'socket.io-client';
-import { api, ApiError } from '@/lib/api';
+import { api, ApiError, getWsBaseUrl } from '@/lib/api';
 
-const WS_BASE = process.env.NEXT_PUBLIC_WS_URL ?? 'http://localhost:3001';
 const DEVICE_TOKEN_KEY = 'shopapp_tv_device_token';
 const DEVICE_ID_KEY = 'shopapp_tv_device_id';
 const DEVICE_CRED_KEY = 'shopapp_tv_device_credential';
@@ -21,7 +20,7 @@ export default function CustomerTvPage() {
   const [error, setError] = useState<string | null>(null);
 
   async function connectWithToken(token: string) {
-    const socket: Socket = io(WS_BASE, { auth: { token } });
+    const socket: Socket = io(getWsBaseUrl(), { auth: { token } });
     socket.on('connect', () => setConnected(true));
     socket.on('disconnect', () => setConnected(false));
     socket.on('connect_error', () => {

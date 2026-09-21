@@ -11,10 +11,9 @@ async function bootstrap() {
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );
 
-  // SECURITY.md §8 — explicit allow-list, not '*', in real deployments.
-  // Left permissive here for local development only; DEPLOYMENT.md
-  // requires this to be locked to the deployed frontend origin(s).
-  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true });
+  const rawCors = process.env.CORS_ORIGIN;
+  const corsOrigin = !rawCors || rawCors === '*' ? true : rawCors.split(',');
+  app.enableCors({ origin: corsOrigin });
 
   const port = process.env.PORT ?? 3001;
   await app.listen(port);

@@ -1,6 +1,23 @@
-'use client';
+export function getApiBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:3001`;
+  }
+  return 'http://localhost:3001';
+}
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001';
+export function getWsBaseUrl(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL;
+  }
+  if (typeof window !== 'undefined' && window.location?.hostname) {
+    return `${window.location.protocol}//${window.location.hostname}:3001`;
+  }
+  return 'http://localhost:3001';
+}
+
 
 export interface AuthTokens {
   accessToken: string;
@@ -67,7 +84,7 @@ export function decodeTokenPayload(token: string): TokenPayload | null {
 
 async function request(path: string, options: RequestInit = {}) {
   const token = getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
@@ -151,7 +168,7 @@ export const api = {
     const formData = new FormData();
     formData.append('image', file);
     const token = getToken();
-    const res = await fetch(`${API_BASE}/catalog/products/${productId}/image`, {
+    const res = await fetch(`${getApiBaseUrl()}/catalog/products/${productId}/image`, {
       method: 'POST',
       headers: {
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -172,7 +189,7 @@ export const api = {
     request(`/catalog/products/${productId}/image`, { method: 'DELETE' }),
   getProductImageUrl: (productId: string) => {
     const token = getToken();
-    return `${API_BASE}/catalog/products/${productId}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+    return `${getApiBaseUrl()}/catalog/products/${productId}/image${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   },
 
   listEmployees: () => request('/employees'),

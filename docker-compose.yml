@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: shopapp-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: shopapp_dev
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres_dev_password
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker-init-db.sql:/docker-entrypoint-initdb.d/01-init-roles.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shopapp_dev"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shopapp-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shopapp-backend
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: "postgresql://shopapp_migrator:migrator_secure_password_123@postgres:5432/shopapp_dev?schema=public"
+      RUNTIME_DATABASE_URL: "postgresql://shopapp:runtime_secure_password_123@postgres:5432/shopapp_dev?schema=public"
+      SUPERADMIN_DATABASE_URL: "postgresql://shopapp_superadmin:superadmin_secure_password_123@postgres:5432/shopapp_dev?schema=public"
+      SUPERADMIN_USERNAME: "superadmin"
+      SUPERADMIN_PASSWORD: "SuperAdmin2026!"
+      SUPERADMIN_DISPLAY_NAME: "Platform Super Admin"
+      JWT_ACCESS_SECRET: "docker_dev_access_secret_key_32bytes_min"
+      JWT_REFRESH_SECRET: "docker_dev_refresh_secret_key_32bytes_min"
+      JWT_ACCESS_TTL: "15m"
+      JWT_REFRESH_TTL: "7d"
+      DEVICE_CREDENTIAL_PEPPER: "docker_dev_device_credential_pepper"
+      PORT: 3001
+      NODE_ENV: production
+      CORS_ORIGIN: "*"
+    volumes:
+      - uploads-data:/app/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shopapp-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: shopapp-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+    depends_on:
+      - backend
+    networks:
+      - shopapp-network
+
+networks:
+  shopapp-network:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  uploads-data:
