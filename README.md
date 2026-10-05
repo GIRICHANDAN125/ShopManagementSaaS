@@ -17,7 +17,7 @@ built yet.
 
 ---
 
-## Architecture overview
+## Architecture  of overview
 
 ```
 React/Next.js frontend  →  Node.js/NestJS API  →  PostgreSQL (source of truth)
