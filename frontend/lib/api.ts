@@ -1,18 +1,24 @@
 export function getApiBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return process.env.INTERNAL_API_URL || 'http://backend:3001';
+  }
   if (process.env.NEXT_PUBLIC_API_URL) {
     return process.env.NEXT_PUBLIC_API_URL;
   }
-  if (typeof window !== 'undefined' && window.location?.hostname) {
+  if (window.location?.hostname) {
     return `${window.location.protocol}//${window.location.hostname}:3001`;
   }
   return 'http://localhost:3001';
 }
 
 export function getWsBaseUrl(): string {
+  if (typeof window === 'undefined') {
+    return process.env.INTERNAL_WS_URL || 'http://backend:3001';
+  }
   if (process.env.NEXT_PUBLIC_WS_URL) {
     return process.env.NEXT_PUBLIC_WS_URL;
   }
-  if (typeof window !== 'undefined' && window.location?.hostname) {
+  if (window.location?.hostname) {
     return `${window.location.protocol}//${window.location.hostname}:3001`;
   }
   return 'http://localhost:3001';

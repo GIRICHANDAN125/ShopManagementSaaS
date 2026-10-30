@@ -16,6 +16,7 @@ import { EmployeesModule } from './employees/employees.module';
 import { SettingsModule } from './settings/settings.module';
 import { ReportsModule } from './reports/reports.module';
 import { CountersModule } from './counters/counters.module';
+import { AppController } from './app.controller';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { CountersModule } from './counters/counters.module';
     ReportsModule,
     CountersModule,
   ],
+  controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

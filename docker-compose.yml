@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -47,6 +45,12 @@ services:
       CORS_ORIGIN: "*"
     volumes:
       - uploads-data:/app/uploads
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,15 +61,23 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: "http://localhost:3001"
+        NEXT_PUBLIC_WS_URL: "http://localhost:3001"
     container_name: shopapp-frontend
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       PORT: 3000
+      HOSTNAME: "0.0.0.0"
       NODE_ENV: production
+      NEXT_PUBLIC_API_URL: "http://localhost:3001"
+      NEXT_PUBLIC_WS_URL: "http://localhost:3001"
+      INTERNAL_API_URL: "http://backend:3001"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     networks:
       - shopapp-network
 
