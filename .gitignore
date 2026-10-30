@@ -3,10 +3,18 @@ node_modules/
 .pnpm-store/
 .yarn/
 
-# Environment / secrets
+# Environment variables and secrets
 .env
 .env.*
+*.env
 !.env.example
+!.env.sample
+
+# Generated cloud database credentials
+scratch/*.env
+scratch/*credentials*
+scratch/*secret*
+scratch/test-verification-data.json
 
 # Build output
 dist/
@@ -35,7 +43,8 @@ Thumbs.db
 .nyc_output/
 .cache/
 
-# Backend generated files
+# Uploads and user-generated files
+uploads/
 backend/uploads/
 backend/tmp/
 
@@ -44,6 +53,7 @@ frontend/.next/
 frontend/out/
 
 # Local databases / dumps
+postgres-data/
 *.sqlite
 *.sqlite3
 *.db
