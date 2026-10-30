@@ -22,7 +22,8 @@
     "migrate:up": "node-pg-migrate up -d DATABASE_URL",
     "migrate:down": "node-pg-migrate down -d DATABASE_URL",
     "migrate:create": "node-pg-migrate create -d DATABASE_URL",
-    "bootstrap:superadmin": "ts-node -r dotenv/config scripts/bootstrap-superadmin.ts"
+    "bootstrap:superadmin": "ts-node -r dotenv/config scripts/bootstrap-superadmin.ts",
+    "start:cloud": "npx node-pg-migrate up -d DATABASE_URL && node dist/scripts/bootstrap-superadmin.js && node dist/src/main.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",

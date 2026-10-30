@@ -21,13 +21,16 @@ export class DatabaseService implements OnModuleDestroy {
   public readonly superAdminPool: Pool;
 
   constructor(private readonly config: ConfigService) {
+    const ssl = this.config.get<string>('DATABASE_SSL') === 'true' ? { rejectUnauthorized: false } : false;
     this.tenantPool = new Pool({
       connectionString: this.config.get<string>('RUNTIME_DATABASE_URL'),
       max: 10,
+      ssl,
     });
     this.superAdminPool = new Pool({
       connectionString: this.config.get<string>('SUPERADMIN_DATABASE_URL'),
       max: 2,
+      ssl,
     });
   }
 

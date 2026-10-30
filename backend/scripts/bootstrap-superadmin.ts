@@ -36,8 +36,10 @@ async function bootstrapSuperAdmin() {
     process.exit(1);
   }
 
+  const ssl = process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false;
   const pool = new Pool({
     connectionString: superAdminUrl,
+    ssl,
   });
 
   const client = await pool.connect();
